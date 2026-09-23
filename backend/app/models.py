@@ -23,22 +23,6 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20))
     password_hash: Mapped[str] = mapped_column(String(128))
 
-class RegulatoryDocument(Base):
-    __tablename__ = "regulatory_documents"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    title: Mapped[str] = mapped_column(String(300))
-    source_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
-
-class RegulatoryRevision(Base):
-    __tablename__ = "regulatory_revisions"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    document_id: Mapped[str] = mapped_column(ForeignKey("regulatory_documents.id"), index=True)
-    section: Mapped[str] = mapped_column(String(200))
-    effective_from: Mapped[date] = mapped_column(Date)
-    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
-    content: Mapped[str] = mapped_column(Text)
-    checksum: Mapped[str] = mapped_column(String(64))
-
 class Consultation(Base):
     __tablename__ = "consultations"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -90,7 +74,9 @@ class Draft(Base):
     __tablename__ = "drafts"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
-    prescription_id: Mapped[str] = mapped_column(ForeignKey("prescriptions.id"), index=True)
+    prescription_id: Mapped[str | None] = mapped_column(ForeignKey("prescriptions.id"), index=True, nullable=True)
+    obligation_revision_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    template_id: Mapped[str | None] = mapped_column(String(30), nullable=True)
     content: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(30), default="draft")
     citations: Mapped[list] = mapped_column(JSON, default=list)
@@ -106,6 +92,15 @@ class Obligation(Base):
     status: Mapped[str] = mapped_column(String(20), default="open")
     priority: Mapped[str] = mapped_column(String(20), default="normal")
     responsible_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class Escalation(Base):
+    __tablename__ = "escalations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    revision_id: Mapped[str] = mapped_column(String(36), index=True)
+    director_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    actor_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 class BackgroundJob(Base):

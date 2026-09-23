@@ -4,13 +4,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 from app.ai import AIRequest, MockAIProvider
-from app.api import app, verified_citations
+from app.api import app
 from app.auth import Actor, require_role
 from app.db import Base, get_db
 from app.deadlines import deadline_state, reminder_offset
 from app.documents import DocumentError, extract_text
-from app.models import Obligation, Organization, Prescription, RegulatoryDocument, RegulatoryRevision, User
-from app.rag import EmbeddingProvider
+from app.models import Obligation, Organization, Prescription, User
+from app.templates import render_obligation_draft
 
 def test_mock_ai_uses_supplied_citation_only():
     import asyncio
@@ -20,10 +20,14 @@ def test_mock_ai_uses_supplied_citation_only():
     assert "[S1]" in result
     assert "Проверенный фрагмент" in result
 
-def test_embedding_is_deterministic():
-    provider = EmbeddingProvider()
-    assert provider.embed("лифт проверка") == provider.embed("лифт проверка")
-    assert provider.embed("лифт проверка") != provider.embed("договор аренда")
+def test_local_template_uses_answer_fields(monkeypatch):
+    monkeypatch.setattr("app.templates.secrets.randbelow", lambda _: 0)
+    content, template_id = render_obligation_draft({"title": "Предписание", "source_fragment": "Связанный фрагмент"},
+        "Что выполнено?", True, date(2026, 9, 23))
+    assert "2026-09-23" in content
+    assert "Мероприятие выполнено" in content
+    assert "Связанный фрагмент" in content
+    assert template_id == "local-1"
 
 def test_deadline_offsets_are_deterministic():
     today = date(2026, 9, 23)
@@ -58,7 +62,8 @@ def test_tenant_scoped_obligations(monkeypatch):
     with Session(engine) as db:
         db.add_all([Organization(id="a", name="A"), Organization(id="b", name="B")])
         db.add_all([User(id="ua", organization_id="a", username="a", role="admin", password_hash="x"),
-                    User(id="ub", organization_id="b", username="b", role="admin", password_hash="x")])
+                    User(id="ub", organization_id="b", username="b", role="admin", password_hash="x"),
+                    User(id="director-a", organization_id="a", username="director-a", role="director", password_hash="x")])
         db.add_all([Obligation(id="oa", organization_id="a", title="Only A", description="", due_date=date(2027, 1, 1)),
                     Obligation(id="ob", organization_id="b", title="Only B", description="", due_date=date(2027, 1, 1))])
         db.add(Prescription(id="pb", organization_id="b", title="Only B", content="Чужой документ организации"))
@@ -72,6 +77,18 @@ def test_tenant_scoped_obligations(monkeypatch):
     from app.auth import get_actor
     app.dependency_overrides[get_db] = db_override
     app.dependency_overrides[get_actor] = lambda: Actor("ua", "a", "a", "admin")
+    async def fake_documents(organization_id, category=None):
+        assert organization_id == "a"
+        assert category == "obligation"
+        return [{"revision_id": "r1", "document_category": "obligation", "title": "Документ A",
+            "due_date": "2026-09-30", "status": "published_demo", "source_fragment": "Условие документа"}]
+    async def fake_document(organization_id, revision_id):
+        assert organization_id == "a"
+        assert revision_id == "r1"
+        return {"revision_id": revision_id, "document_category": "obligation", "title": "Документ A",
+            "status": "published_demo", "source_fragment": "Условие документа", "original_url": "/api/v1/documents/r1/original"}
+    monkeypatch.setattr("app.documents_api.list_documents", fake_documents)
+    monkeypatch.setattr("app.documents_api.get_document", fake_document)
     try:
         with TestClient(app) as client:
             result = client.get("/api/v1/obligations")
@@ -86,21 +103,19 @@ def test_tenant_scoped_obligations(monkeypatch):
             draft = client.post("/api/v1/prescriptions/pa/drafts")
             assert draft.status_code == 201
             assert "evidence.txt" in draft.json()["content"]
+            dashboard = client.get("/api/v1/deadline-dashboard")
+            assert dashboard.status_code == 200
+            assert dashboard.json()[0]["revision_id"] == "r1"
+            escalated = client.post("/api/v1/deadline-dashboard/r1/escalate")
+            assert escalated.status_code == 200
+            assert client.post("/api/v1/deadline-dashboard/r1/escalate").json()["id"] == escalated.json()["id"]
+            generated = client.post("/api/v1/obligation-documents/r1/drafts", json={
+                "question": "Было ли исполнено?", "completion_date": "2026-09-23", "completed": False})
+            assert generated.status_code == 201
+            assert "Планируемая дата" in generated.json()["content"]
+            updated = client.patch(f"/api/v1/drafts/{generated.json()['id']}", json={"content": "Изменённый текст ответа"})
+            assert updated.status_code == 200
+            assert updated.json()["content"] == "Изменённый текст ответа"
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
-
-def test_citations_use_canonical_revision_and_legal_date():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    with Session(engine) as db:
-        db.add(RegulatoryDocument(id="doc", title="Проверенный источник", source_url="https://example.org/source"))
-        db.add(RegulatoryRevision(id="rev", document_id="doc", section="Статья 1", effective_from=date(2025, 1, 1),
-                                  effective_to=date(2026, 1, 1), content="Подтверждённый текст источника", checksum="x"))
-        db.commit()
-        hit = {"document_id": "doc", "revision_id": "rev", "chunk_id": "c", "title": "Подменённое название",
-               "fragment": "Подтверждённый текст", "score": 0.9}
-        valid = verified_citations(db, [hit], date(2025, 6, 1))
-        assert valid[0]["title"] == "Проверенный источник"
-        assert verified_citations(db, [hit], date(2026, 1, 1)) == []
-    engine.dispose()

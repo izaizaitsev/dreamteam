@@ -21,13 +21,47 @@ services:
     image: qdrant/qdrant:v1.15.5
     volumes:
       - qdrant_data:/qdrant/storage
-  rag-service:
-    build: ./backend
-    command: uvicorn app.rag:app --host 0.0.0.0 --port 8001
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address :9001
     environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    volumes:
+      - minio_data:/data
+  rag-service:
+    build: ./rag-service
+    command: sh -c "alembic upgrade head && uvicorn rag.api:app --host 0.0.0.0 --port 8001"
+    environment: &rag_env
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-legal_assistant}:${POSTGRES_PASSWORD:-local_dev_password}@postgres:5432/${POSTGRES_DB:-legal_assistant}
       QDRANT_URL: http://qdrant:6333
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      RAG_INTERNAL_TOKEN: ${RAG_INTERNAL_TOKEN:-local-rag-internal-token}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
     depends_on:
-      - qdrant
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=2)"]
+      interval: 5s
+      retries: 20
+  rag-worker:
+    build: ./rag-service
+    command: celery -A rag.worker.celery_app worker --loglevel=info --concurrency=2 --queues=rag_ingestion
+    environment: *rag_env
+    depends_on:
+      rag-service:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
   backend-api:
     build: ./backend
     command: sh -c "alembic upgrade head && python -m app.seed && uvicorn app.api:app --host 0.0.0.0 --port 8000"
@@ -37,6 +71,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-legal_assistant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_password}
       RAG_URL: http://rag-service:8001
+      RAG_INTERNAL_TOKEN: ${RAG_INTERNAL_TOKEN:-local-rag-internal-token}
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
       DEMO_PASSWORD: ${DEMO_PASSWORD:-demo12345}
       AI_PROVIDER: ${AI_PROVIDER:-mock}
@@ -51,7 +86,7 @@ services:
       rabbitmq:
         condition: service_healthy
       rag-service:
-        condition: service_started
+        condition: service_healthy
   worker:
     build: ./backend
     command: celery -A app.worker.celery_app worker --loglevel=info
@@ -75,3 +110,4 @@ services:
 volumes:
   postgres_data:
   qdrant_data:
+  minio_data:

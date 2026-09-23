@@ -6,7 +6,7 @@ from uuid import uuid4
 import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -15,12 +15,15 @@ from .auth import Actor, get_actor, password_hash, require_role, token_for
 from .db import get_db
 from .deadlines import deadline_state, local_today
 from .documents import DocumentError, MAX_FILE_BYTES, extract_text
+from .documents_api import router as documents_router
 from .models import (AIGeneration, AuditEvent, BackgroundJob, Consultation, Draft, Obligation,
-                     Prescription, RegulatoryDocument, RegulatoryRevision, User, UserDocument)
+                     Prescription, User, UserDocument)
+from .rag_client import RAGError, search as rag_search
 from .worker import evaluate_deadlines
 
 app = FastAPI(title="ЖКХ: юридический помощник", version="0.1.0")
 PREFIX = "/api/v1"
+app.include_router(documents_router)
 
 @app.exception_handler(HTTPException)
 async def http_error(request: Request, exc: HTTPException):
@@ -52,22 +55,6 @@ class ObligationIn(BaseModel):
     due_date: date
     priority: str = "normal"
 
-class RevisionIn(BaseModel):
-    document_id: str | None = None
-    title: str = Field(min_length=3, max_length=300)
-    section: str = Field(min_length=1, max_length=200)
-    source_url: HttpUrl | None = None
-    effective_from: date
-    effective_to: date | None = None
-    content: str = Field(min_length=10, max_length=100000)
-
-    @field_validator("source_url")
-    @classmethod
-    def https_only(cls, value: HttpUrl | None):
-        if value is not None and value.scheme != "https":
-            raise ValueError("Используйте HTTPS для ссылки на источник")
-        return value
-
 def fail(status: int, code: str, message: str):
     raise HTTPException(status_code=status, detail={"code": code, "message": message})
 
@@ -80,7 +67,8 @@ def consultation_out(item: Consultation) -> dict:
             "status": item.status, "answer": item.answer, "citations": item.citations, "created_at": item.created_at}
 
 def draft_out(item: Draft) -> dict:
-    return {"id": item.id, "prescription_id": item.prescription_id, "content": item.content,
+    return {"id": item.id, "prescription_id": item.prescription_id,
+            "obligation_revision_id": item.obligation_revision_id, "template_id": item.template_id, "content": item.content,
             "status": item.status, "citations": item.citations, "created_at": item.created_at}
 
 def obligation_out(item: Obligation) -> dict:
@@ -89,24 +77,6 @@ def obligation_out(item: Obligation) -> dict:
     state = deadline_state(item.due_date, item.status, today)
     return {"id": item.id, "title": item.title, "description": item.description, "due_date": item.due_date,
             "status": item.status, "priority": item.priority, "deadline_state": state, "days_remaining": remaining}
-
-def verified_citations(db: Session, hits: list[dict], target_date: date) -> list[dict]:
-    result = []
-    for hit in hits:
-        revision = db.scalar(select(RegulatoryRevision).where(RegulatoryRevision.id == hit.get("revision_id")))
-        if revision is None or revision.document_id != hit.get("document_id") or revision.effective_from > target_date or (revision.effective_to and target_date >= revision.effective_to):
-            continue
-        if hit.get("fragment", "") not in revision.content:
-            continue
-        document = db.scalar(select(RegulatoryDocument).where(RegulatoryDocument.id == revision.document_id))
-        if document is None:
-            continue
-        result.append({"citation_id": f"S{len(result) + 1}", "document_id": document.id,
-                       "revision_id": revision.id, "chunk_id": hit.get("chunk_id"), "title": document.title,
-                       "section": revision.section, "effective_from": revision.effective_from.isoformat(),
-                       "effective_to": revision.effective_to.isoformat() if revision.effective_to else None,
-                       "source_url": document.source_url, "fragment": hit["fragment"], "score": hit.get("score")})
-    return result
 
 @app.get("/health")
 def health():
@@ -130,28 +100,28 @@ def list_consultations(actor: Actor = Depends(get_actor), db: Session = Depends(
 @app.post(PREFIX + "/consultations", status_code=201)
 async def create_consultation(data: ConsultationIn, actor: Actor = Depends(get_actor), db: Session = Depends(get_db)):
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(os.environ.get("RAG_URL", "http://localhost:8001") + "/internal/search", json=data.model_dump(mode="json"))
-            response.raise_for_status()
-            evidence = verified_citations(db, response.json()["evidence"], data.target_date)
-    except (httpx.HTTPError, KeyError, ValueError):
+        retrieval = await rag_search(data.question, actor.organization_id, data.target_date.isoformat())
+        evidence = retrieval["evidence"]
+    except (RAGError, KeyError, ValueError):
         fail(503, "retrieval_unavailable", "Поиск источников временно недоступен")
     status = "insufficient_evidence"
     answer = None
     if evidence:
         try:
             answer = await get_provider().generate(AIRequest("consultation", data.question, evidence))
-            status = "ai_draft"
+            status = "demo_unverified" if any(item["date_provenance"] != "confirmed" for item in evidence) else "ai_draft"
+            if status == "demo_unverified":
+                answer = "Демонстрационный черновик: сроки действия источников не подтверждены.\n" + answer
         except (httpx.HTTPError, KeyError, ValueError, RuntimeError):
             fail(503, "generation_unavailable", "Генерация временно недоступна")
     item = Consultation(organization_id=actor.organization_id, actor_id=actor.id, question=data.question,
                         target_date=data.target_date, status=status, answer=answer, citations=evidence)
     db.add(item)
     db.flush()
-    if status == "ai_draft":
+    if status != "insufficient_evidence":
         db.add(AIGeneration(organization_id=actor.organization_id, resource="consultation", resource_id=item.id,
                             provider=get_provider().name, model=os.environ.get("AI_MODEL", "mock-v1"), prompt_version="v1",
-                            target_date=data.target_date, source_ids=[entry["chunk_id"] for entry in evidence],
+                            target_date=data.target_date, source_ids=[entry["passage_id"] for entry in evidence],
                             user_document_ids=[], status="succeeded"))
     audit(db, actor, "consultation", item.id, "created")
     db.commit()
@@ -289,49 +259,6 @@ def decide_draft(item_id: str, decision: str, actor: Actor = Depends(get_actor),
     audit(db, actor, "draft", item.id, item.status)
     db.commit()
     return draft_out(item)
-
-@app.get(PREFIX + "/sources")
-def list_sources(actor: Actor = Depends(get_actor), db: Session = Depends(get_db)):
-    rows = db.execute(select(RegulatoryDocument, RegulatoryRevision).join(RegulatoryRevision, RegulatoryDocument.id == RegulatoryRevision.document_id)).all()
-    return [{"id": revision.id, "title": document.title, "section": revision.section,
-             "effective_from": revision.effective_from, "effective_to": revision.effective_to,
-             "source_url": document.source_url, "checksum": revision.checksum} for document, revision in rows]
-
-@app.post(PREFIX + "/sources", status_code=201)
-async def create_source(data: RevisionIn, actor: Actor = Depends(get_actor), db: Session = Depends(get_db)):
-    require_role(actor, "admin", "lawyer")
-    if data.effective_to and data.effective_to <= data.effective_from:
-        fail(422, "invalid_interval", "Конец действия должен быть позже начала")
-    if data.document_id:
-        document = db.scalar(select(RegulatoryDocument).where(RegulatoryDocument.id == data.document_id))
-        if document is None:
-            fail(404, "not_found", "Документ не найден")
-        if document.title != data.title:
-            fail(422, "title_mismatch", "Название редакции должно совпадать с документом")
-        revisions = db.scalars(select(RegulatoryRevision).where(RegulatoryRevision.document_id == document.id)).all()
-        for old in revisions:
-            if (old.effective_to is None or data.effective_from < old.effective_to) and (data.effective_to is None or old.effective_from < data.effective_to):
-                fail(409, "revision_overlap", "Периоды действия редакций пересекаются")
-    else:
-        document = RegulatoryDocument(title=data.title, source_url=str(data.source_url) if data.source_url else None)
-        db.add(document)
-        db.flush()
-    revision = RegulatoryRevision(document_id=document.id, section=data.section, effective_from=data.effective_from,
-                                  effective_to=data.effective_to, content=data.content,
-                                  checksum=hashlib.sha256(data.content.encode()).hexdigest())
-    db.add(revision)
-    db.flush()
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(os.environ.get("RAG_URL", "http://localhost:8001") + "/internal/revisions", json={
-                **data.model_dump(mode="json"), "document_id": document.id, "revision_id": revision.id})
-            response.raise_for_status()
-    except httpx.HTTPError:
-        db.rollback()
-        fail(503, "index_unavailable", "Не удалось проиндексировать источник")
-    audit(db, actor, "regulatory_revision", revision.id, "created")
-    db.commit()
-    return {"id": revision.id, "document_id": document.id, "indexed_chunks": response.json()["indexed_chunks"]}
 
 @app.post(PREFIX + "/deadline-checks", status_code=202)
 def start_deadline_check(actor: Actor = Depends(get_actor), db: Session = Depends(get_db)):

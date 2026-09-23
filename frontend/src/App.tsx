@@ -1,15 +1,30 @@
 import { useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, post, setToken, upload, type Attachment, type Citation, type Consultation, type Draft, type Job, type Obligation, type Prescription, type Source, type User } from './api'
+import { api, downloadOriginal, patch, post, setToken, uploadDocument,
+  type Citation, type Consultation, type DashboardItem, type DocumentJob,
+  type DocumentSummary, type Draft, type Escalation, type User } from './api'
 
-type Section = 'consultations' | 'obligations' | 'prescriptions' | 'sources'
+type Section = 'consultations' | 'generator' | 'deadlines'
+const today = () => new Date().toLocaleDateString('en-CA')
 
-function ErrorText({ error }: { error: unknown }) { return error ? <p role="alert" className="error">{error instanceof Error ? error.message : String(error)}</p> : null }
-function Citations({ items }: { items: Citation[] }) {
-  return <div className="citations"><h4>Проверяемые источники</h4>{items.length ? items.map(item => <article className="citation" key={item.citation_id}>
-    <strong>[{item.citation_id}] {item.title}</strong><p>{item.section} · с {item.effective_from}{item.effective_to ? ` по ${item.effective_to}` : ''}</p>
-    <p>{item.fragment}</p>{item.source_url && <a href={item.source_url} target="_blank" rel="noopener noreferrer">Открыть источник</a>}
-  </article>) : <p>Подтверждённые источники отсутствуют.</p>}</div>
+function ErrorText({ error }: { error: unknown }) {
+  return error ? <p role="alert" className="error">{error instanceof Error ? error.message : String(error)}</p> : null
+}
+
+function OriginalButton({ revisionId }: { revisionId: string }) {
+  const [error, setError] = useState<unknown>(null)
+  return <><button type="button" className="secondary" onClick={async () => { try { await downloadOriginal(revisionId) } catch (err) { setError(err) } }}>Скачать оригинал DOCX</button><ErrorText error={error} /></>
+}
+
+function CitationCards({ items }: { items: Citation[] }) {
+  return <div className="citations"><h4>Фрагменты и происхождение</h4>{items.length ? items.map((item, index) =>
+    <article className="citation" key={`${item.revision_id || index}-${index}`}>
+      <strong>[{item.citation_id || `S${index + 1}`}] {item.title}</strong>
+      <p className="muted">{item.document_category === 'obligation' ? 'Документ обязательств' : 'Нормативный документ'}{item.section ? ` · ${item.section}` : ''}</p>
+      <p>{item.fragment}</p>
+      {item.date_provenance === 'demo_random_unverified' && <p className="notice">Даты предложены демозаглушкой, не подтверждены источником.</p>}
+      {item.revision_id && <OriginalButton revisionId={item.revision_id} />}
+    </article>) : <p>Подтверждённых фрагментов нет.</p>}</div>
 }
 
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
@@ -29,141 +44,147 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   </form></main>
 }
 
-function Consultations() {
+function DocumentUploader({ category, user }: { category: 'normative' | 'obligation'; user: User }) {
   const client = useQueryClient()
-  const query = useQuery({ queryKey: ['consultations'], queryFn: () => api<Consultation[]>('/consultations') })
-  const [question, setQuestion] = useState('')
-  const [targetDate, setTargetDate] = useState(new Date().toLocaleDateString('en-CA'))
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<unknown>(null)
-  async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError(null)
-    try { await post<Consultation>('/consultations', { question, target_date: targetDate }); setQuestion(''); await client.invalidateQueries({ queryKey: ['consultations'] }) }
-    catch (err) { setError(err) } finally { setBusy(false) }
-  }
-  return <><header><span className="eyebrow">Работа с нормами</span><h2>Консультации</h2><p>Ответ строится по загруженным источникам и требует проверки юристом.</p></header>
-    <form className="panel form" onSubmit={submit}><label>Вопрос<textarea value={question} onChange={event => setQuestion(event.target.value)} minLength={5} required placeholder="Опишите ситуацию и вопрос" /></label>
-      <label>Дата, на которую нужны нормы<input type="date" value={targetDate} onChange={event => setTargetDate(event.target.value)} required /></label>
-      <button disabled={busy}>{busy ? 'Ищем источники…' : 'Получить черновик ответа'}</button><ErrorText error={error} /></form>
-    <h3>История</h3>{query.isLoading && <p role="status">Загрузка…</p>}<ErrorText error={query.error} />
-    {query.data?.length === 0 && <p className="empty">Пока нет консультаций.</p>}
-    {query.data?.map(item => <article className="panel" key={item.id}><div className="card-top"><strong>{item.question}</strong><span className="badge">{item.status === 'ai_draft' ? 'Черновик ИИ' : 'Недостаточно источников'}</span></div>
-      <p className="muted">Дата применения норм: {item.target_date}</p>
-      {item.status === 'insufficient_evidence' ? <p>Доступных источников недостаточно для надёжного вывода. Добавьте или уточните нормативные документы.</p> : <p className="answer">{item.answer}</p>}
-      <Citations items={item.citations} /></article>)}</>
-}
-
-function Obligations() {
-  const client = useQueryClient()
-  const query = useQuery({ queryKey: ['obligations'], queryFn: () => api<Obligation[]>('/obligations') })
   const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [dueDate, setDueDate] = useState('')
-  const [priority, setPriority] = useState('normal')
-  const [error, setError] = useState<unknown>(null)
-  const [busy, setBusy] = useState(false)
-  const [jobId, setJobId] = useState('')
-  const job = useQuery({ queryKey: ['job', jobId], queryFn: () => api<Job>(`/jobs/${jobId}`), enabled: !!jobId,
-    refetchInterval: query => ['succeeded', 'failed', 'cancelled'].includes(query.state.data?.status || '') ? false : 2000 })
-  async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError(null)
-    try { await post('/obligations', { title, description, due_date: dueDate, priority }); setTitle(''); setDescription(''); setDueDate(''); await client.invalidateQueries({ queryKey: ['obligations'] }) }
-    catch (err) { setError(err) } finally { setBusy(false) }
-  }
-  async function complete(id: string) { try { await post(`/obligations/${id}/complete`); await client.invalidateQueries({ queryKey: ['obligations'] }) } catch (err) { setError(err) } }
-  async function check() { try { const result = await post<{ job_id: string }>('/deadline-checks'); setJobId(result.job_id) } catch (err) { setError(err) } }
-  return <><header><span className="eyebrow">Контроль исполнения</span><h2>Обязательства и сроки</h2><p>Просматривайте ближайшие и просроченные задачи.</p></header>
-    <form className="panel form" onSubmit={submit}><label>Название<input value={title} onChange={event => setTitle(event.target.value)} required minLength={2} /></label>
-      <label>Описание<textarea value={description} onChange={event => setDescription(event.target.value)} /></label>
-      <div className="row"><label>Срок<input type="date" value={dueDate} onChange={event => setDueDate(event.target.value)} required /></label>
-      <label>Приоритет<select value={priority} onChange={event => setPriority(event.target.value)}><option value="low">Низкий</option><option value="normal">Обычный</option><option value="high">Высокий</option></select></label></div>
-      <button disabled={busy}>Добавить обязательство</button><ErrorText error={error} /></form>
-    <div className="section-heading"><h3>Список</h3><button className="secondary" onClick={check}>Проверить ближайшие сроки</button></div>
-    {jobId && <div className="panel"><strong>Проверка сроков: {job.data?.status || 'ожидание'}</strong>{job.data?.result?.due.map(item => <p key={item.id}>{item.title}: {item.days_remaining < 0 ? `просрочено на ${-item.days_remaining} дн.` : `осталось ${item.days_remaining} дн.`}</p>)}<ErrorText error={job.error || job.data?.error} /></div>}
-    {query.isLoading && <p role="status">Загрузка…</p>}<ErrorText error={query.error} />{query.data?.length === 0 && <p className="empty">Обязательств пока нет.</p>}
-    {query.data?.map(item => <article className="panel compact" key={item.id}><div><div className="card-top"><strong>{item.title}</strong><span className={`badge ${item.deadline_state}`}>{item.deadline_state === 'overdue' ? 'Просрочено' : item.deadline_state === 'due_soon' ? 'Скоро срок' : item.deadline_state === 'closed' ? 'Завершено' : 'Предстоит'}</span></div><p>{item.description}</p><small>Срок: {item.due_date} · Приоритет: {item.priority}</small></div>{item.status !== 'done' && <button className="secondary" onClick={() => complete(item.id)}>Завершить</button>}</article>)}</>
-}
-
-function Prescriptions({ user }: { user: User }) {
-  const client = useQueryClient()
-  const query = useQuery({ queryKey: ['prescriptions'], queryFn: () => api<Prescription[]>('/prescriptions') })
-  const [selected, setSelected] = useState('')
-  const drafts = useQuery({ queryKey: ['drafts', selected], queryFn: () => api<Draft[]>(`/prescriptions/${selected}/drafts`), enabled: !!selected })
-  const attachments = useQuery({ queryKey: ['attachments', selected], queryFn: () => api<Attachment[]>(`/prescriptions/${selected}/attachments`), enabled: !!selected })
-  const [title, setTitle] = useState('')
-  const [content, setContent] = useState('')
-  const [error, setError] = useState<unknown>(null)
-  const [busy, setBusy] = useState(false)
   const [file, setFile] = useState<File | null>(null)
-  const [uploadState, setUploadState] = useState<'idle' | 'selected' | 'uploading' | 'ready' | 'failed'>('idle')
+  const [jobId, setJobId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+  const job = useQuery({ queryKey: ['document-job', jobId], queryFn: () => api<DocumentJob>(`/documents/jobs/${jobId}`), enabled: !!jobId,
+    refetchInterval: query => ['succeeded', 'failed', 'needs_review'].includes(query.state.data?.status || '') ? false : 1500 })
+  const status = job.data?.status
+  if (category === 'normative' && !['admin', 'lawyer'].includes(user.role)) return null
   async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError(null)
-    try { const item = await post<Prescription>('/prescriptions', { title, content }); setTitle(''); setContent(''); setSelected(item.id); await client.invalidateQueries({ queryKey: ['prescriptions'] }) }
+    event.preventDefault(); if (!file) return
+    setBusy(true); setError(null)
+    try { const result = await uploadDocument(category, title, file); setJobId(result.job_id); setTitle(''); setFile(null) }
     catch (err) { setError(err) } finally { setBusy(false) }
   }
-  async function action(path: string) { setBusy(true); setError(null); try { await post(path); await client.invalidateQueries({ queryKey: ['drafts', selected] }) } catch (err) { setError(err) } finally { setBusy(false) } }
-  async function uploadFile() {
-    if (!file || !selected) return
-    setUploadState('uploading'); setError(null)
-    try { await upload<Attachment>(`/prescriptions/${selected}/attachments`, file); setFile(null); setUploadState('ready'); await client.invalidateQueries({ queryKey: ['attachments', selected] }) }
-    catch (err) { setError(err); setUploadState('failed') }
+  async function refresh() {
+    await client.invalidateQueries({ queryKey: ['documents', category] })
+    await client.invalidateQueries({ queryKey: ['deadline-dashboard'] })
   }
-  const source = query.data?.find(item => item.id === selected)
-  const canDraft = ['admin', 'director', 'lawyer'].includes(user.role)
-  const canReview = ['admin', 'lawyer'].includes(user.role)
-  return <><header><span className="eyebrow">Документы</span><h2>Предписания и проекты ответов</h2><p>Созданный текст остаётся черновиком до явного решения проверяющего.</p></header>
-    <form className="panel form" onSubmit={submit}><label>Название предписания<input value={title} onChange={event => setTitle(event.target.value)} minLength={2} required /></label>
-      <label>Текст предписания<textarea value={content} onChange={event => setContent(event.target.value)} minLength={10} required /></label>
-      <button disabled={busy}>Сохранить предписание</button><ErrorText error={error} /></form>
-    <h3>Документы</h3>{query.isLoading && <p role="status">Загрузка…</p>}<ErrorText error={query.error} />
-    {query.data?.length === 0 && <p className="empty">Предписаний пока нет.</p>}
-    <div className="document-list">{query.data?.map(item => <button className={selected === item.id ? 'selected' : 'secondary'} key={item.id} onClick={() => { setSelected(item.id); setFile(null); setUploadState('idle') }}>{item.title}</button>)}</div>
-    {source && <section className="panel"><h3>{source.title}</h3><p className="answer">{source.content}</p>
-      <div className="attachments"><h4>Приложения</h4><p className="muted">TXT или PDF с текстовым слоем, до 10 МБ. Текст будет учтён при создании черновика.</p>
-        <label>Выберите файл<input type="file" accept=".txt,.pdf,text/plain,application/pdf" onChange={event => { setFile(event.target.files?.[0] || null); setUploadState(event.target.files?.[0] ? 'selected' : 'idle') }} /></label>
-        <button className="secondary" disabled={!file || uploadState === 'uploading'} onClick={uploadFile}>{uploadState === 'uploading' ? 'Загрузка…' : 'Загрузить приложение'}</button>
-        {uploadState === 'ready' && <p role="status">Файл обработан и готов к использованию.</p>}
-        {uploadState === 'failed' && <p role="status">Обработка файла не удалась.</p>}
-        <ErrorText error={attachments.error} />
-        {attachments.isLoading && <p role="status">Загрузка приложений…</p>}
-        {attachments.data?.map(item => <p key={item.id}>{item.filename} · {item.status === 'ready' ? 'готов' : item.status}</p>)}
-      </div>{canDraft && <button disabled={busy} onClick={() => action(`/prescriptions/${source.id}/drafts`)}>Создать новый черновик</button>}</section>}
-    {drafts.isLoading && <p role="status">Загрузка черновиков…</p>}<ErrorText error={drafts.error} />
-    {drafts.data?.map(item => <article className="panel" key={item.id}><div className="card-top"><h3>Проект ответа</h3><span className="badge">{({ draft: 'Черновик ИИ', legal_review: 'На проверке', approved: 'Утверждён', rejected: 'Отклонён' } as Record<string, string>)[item.status] || item.status}</span></div>
-      <p className="answer">{item.content}</p><Citations items={item.citations} />
-      {canReview && item.status === 'draft' && <button disabled={busy} onClick={() => action(`/drafts/${item.id}/review`)}>Передать на проверку</button>}
-      {canReview && item.status === 'legal_review' && <div className="actions"><button disabled={busy} onClick={() => action(`/drafts/${item.id}/approve`)}>Утвердить</button><button disabled={busy} className="secondary" onClick={() => action(`/drafts/${item.id}/reject`)}>Отклонить</button></div>}
-    </article>)}</>
+  return <form className="panel form" onSubmit={submit}><div className="card-top"><h3>Загрузить DOCX</h3><span className="badge">{category === 'obligation' ? 'Документ обязательств' : 'Нормативный документ'}</span></div>
+    <label>Название документа<input value={title} onChange={event => setTitle(event.target.value)} minLength={3} required /></label>
+    <label>Файл DOCX<input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={event => setFile(event.target.files?.[0] || null)} required /></label>
+    <button disabled={busy || !file}>{busy ? 'Приём файла…' : 'Загрузить документ'}</button><ErrorText error={error} />
+    {jobId && <div className="job-state" role="status">Обработка: {status || 'в очереди'}{job.data?.stage ? ` · этап ${job.data.stage}` : ''}
+      {job.data?.error_message && <p className="error">{job.data.error_message}</p>}
+      {status === 'succeeded' && <button type="button" className="secondary" onClick={refresh}>Показать документ в списке</button>}
+    </div>}
+  </form>
 }
 
-function Sources({ user }: { user: User }) {
+function Consultations({ user }: { user: User }) {
   const client = useQueryClient()
-  const query = useQuery({ queryKey: ['sources'], queryFn: () => api<Source[]>('/sources') })
-  const [title, setTitle] = useState('')
-  const [section, setSection] = useState('')
-  const [sourceUrl, setSourceUrl] = useState('')
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
-  const [content, setContent] = useState('')
-  const [error, setError] = useState<unknown>(null)
+  const documents = useQuery({ queryKey: ['documents', 'normative'], queryFn: () => api<DocumentSummary[]>('/documents?document_category=normative') })
+  const consultations = useQuery({ queryKey: ['consultations'], queryFn: () => api<Consultation[]>('/consultations') })
+  const [question, setQuestion] = useState('')
+  const [targetDate, setTargetDate] = useState(today())
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>(null)
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError(null)
-    try { await post('/sources', { title, section, source_url: sourceUrl || null, effective_from: from, effective_to: to || null, content }); setContent(''); await client.invalidateQueries({ queryKey: ['sources'] }) }
+    try { await post('/consultations', { question, target_date: targetDate }); setQuestion(''); await client.invalidateQueries({ queryKey: ['consultations'] }) }
     catch (err) { setError(err) } finally { setBusy(false) }
   }
-  return <><header><span className="eyebrow">База знаний</span><h2>Нормативные источники</h2><p>Добавляйте проверенные тексты с датами действия. Система не создаёт правовые сведения самостоятельно.</p></header>
-    {['admin', 'lawyer'].includes(user.role) && <form className="panel form" onSubmit={submit}>
-      <label>Название документа<input value={title} onChange={event => setTitle(event.target.value)} required minLength={3} /></label>
-      <label>Статья или раздел<input value={section} onChange={event => setSection(event.target.value)} required /></label>
-      <label>Ссылка на первоисточник<input type="url" value={sourceUrl} onChange={event => setSourceUrl(event.target.value)} /></label>
-      <div className="row"><label>Действует с<input type="date" value={from} onChange={event => setFrom(event.target.value)} required /></label><label>Действует до<input type="date" value={to} onChange={event => setTo(event.target.value)} /></label></div>
-      <label>Проверенный текст<textarea value={content} onChange={event => setContent(event.target.value)} required minLength={10} /></label>
-      <button disabled={busy}>{busy ? 'Индексация…' : 'Добавить источник'}</button><ErrorText error={error} />
-    </form>}
-    <h3>Загруженные редакции</h3>{query.isLoading && <p role="status">Загрузка…</p>}<ErrorText error={query.error} />
-    {query.data?.length === 0 && <p className="empty">Источники ещё не загружены. Консультации будут показывать недостаточность данных.</p>}
-    {query.data?.map(item => <article className="panel compact" key={item.id}><div><strong>{item.title}</strong><p>{item.section} · с {item.effective_from}{item.effective_to ? ` по ${item.effective_to}` : ''}</p>{item.source_url && <a href={item.source_url} target="_blank" rel="noopener noreferrer">Первоисточник</a>}</div></article>)}</>
+  return <><header><span className="eyebrow">Модуль 1</span><h2>Консультации</h2></header>
+    <DocumentUploader category="normative" user={user} />
+    <h3>Нормативные документы</h3>{documents.isLoading && <p role="status">Загрузка…</p>}<ErrorText error={documents.error} />
+    {documents.data?.length === 0 && <p className="empty">Пока нет нормативных DOCX.</p>}
+    {documents.data?.map(item => <article className="panel compact" key={item.revision_id}><div><strong>{item.title}</strong><p>{item.filename} · {item.status}</p>
+      <small>Демо период: {item.valid_from || 'не задан'} — {item.valid_to || 'не задан'}; даты не подтверждены.</small></div><OriginalButton revisionId={item.revision_id} /></article>)}
+    <form className="panel form" onSubmit={submit}><h3>Задать вопрос</h3><label>Вопрос<textarea value={question} onChange={event => setQuestion(event.target.value)} minLength={5} required /></label>
+      <label>Дата анализа<input type="date" value={targetDate} onChange={event => setTargetDate(event.target.value)} required /></label>
+      <button disabled={busy}>{busy ? 'Поиск…' : 'Получить черновик'}</button><ErrorText error={error} /></form>
+    <h3>История консультаций</h3>{consultations.isLoading && <p role="status">Загрузка…</p>}<ErrorText error={consultations.error} />
+    {consultations.data?.length === 0 && <p className="empty">Консультаций пока нет.</p>}
+    {consultations.data?.map(item => <article className="panel" key={item.id}><div className="card-top"><strong>{item.question}</strong><span className="badge">{item.status === 'insufficient_evidence' ? 'Недостаточно данных' : item.status === 'demo_unverified' ? 'Демо черновик' : 'Черновик'}</span></div>
+      <p className="muted">Дата анализа: {item.target_date}</p>
+      {item.status === 'insufficient_evidence' ? <p>По загруженным документам не найдено достаточно оснований для ответа.</p> : <p className="answer">{item.answer}</p>}
+      <CitationCards items={item.citations} /></article>)}</>
+}
+
+function DraftEditor({ draft, revisionId, canReview }: { draft: Draft; revisionId: string; canReview: boolean }) {
+  const client = useQueryClient()
+  const [content, setContent] = useState(draft.content)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+  async function action(path: string, edit = false) {
+    setBusy(true); setError(null)
+    try { if (edit) await patch(path, { content }); else await post(path); await client.invalidateQueries({ queryKey: ['obligation-drafts', revisionId] }) }
+    catch (err) { setError(err) } finally { setBusy(false) }
+  }
+  return <article className="panel"><div className="card-top"><h3>Проект ответа</h3><span className="badge">{draft.status === 'draft' ? 'Редактируемый черновик' : draft.status === 'legal_review' ? 'На проверке' : draft.status === 'approved' ? 'Утверждён' : 'Отклонён'}</span></div>
+    <p className="muted">Локальный шаблон: {draft.template_id || '—'}</p>
+    {draft.status === 'draft' ? <label>Текст черновика<textarea className="draft-editor" value={content} onChange={event => setContent(event.target.value)} /></label> : <p className="answer">{draft.content}</p>}
+    {draft.status === 'draft' && <div className="actions"><button disabled={busy} onClick={() => action(`/drafts/${draft.id}`, true)}>Сохранить правки</button>{canReview && <button className="secondary" disabled={busy} onClick={() => action(`/drafts/${draft.id}/review`)}>Передать на проверку</button>}</div>}
+    {draft.status === 'legal_review' && canReview && <div className="actions"><button disabled={busy} onClick={() => action(`/drafts/${draft.id}/approve`)}>Утвердить</button><button className="secondary" disabled={busy} onClick={() => action(`/drafts/${draft.id}/reject`)}>Отклонить</button></div>}
+    <ErrorText error={error} /><CitationCards items={draft.citations} />
+  </article>
+}
+
+function Generator({ user }: { user: User }) {
+  const client = useQueryClient()
+  const documents = useQuery({ queryKey: ['documents', 'obligation'], queryFn: () => api<DocumentSummary[]>('/documents?document_category=obligation') })
+  const [selected, setSelected] = useState('')
+  const drafts = useQuery({ queryKey: ['obligation-drafts', selected], queryFn: () => api<Draft[]>(`/obligation-documents/${selected}/drafts`), enabled: !!selected })
+  const [question, setQuestion] = useState('')
+  const [completionDate, setCompletionDate] = useState(today())
+  const [completed, setCompleted] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+  async function submit(event: FormEvent) {
+    event.preventDefault(); if (!selected) return
+    setBusy(true); setError(null)
+    try { await post(`/obligation-documents/${selected}/drafts`, { question, completion_date: completionDate, completed }); await client.invalidateQueries({ queryKey: ['obligation-drafts', selected] }) }
+    catch (err) { setError(err) } finally { setBusy(false) }
+  }
+  const selectedDocument = documents.data?.find(item => item.revision_id === selected)
+  return <><header><span className="eyebrow">Модуль 2</span><h2>Генератор ответов</h2></header>
+    <DocumentUploader category="obligation" user={user} />
+    <h3>Документы обязательств</h3>{documents.isLoading && <p role="status">Загрузка…</p>}<ErrorText error={documents.error} />
+    {documents.data?.length === 0 && <p className="empty">Загрузите DOCX документа обязательств.</p>}
+    <div className="document-list">{documents.data?.filter(item => item.status === 'published_demo').map(item =>
+      <button key={item.revision_id} className={selected === item.revision_id ? 'selected' : 'secondary'} onClick={() => setSelected(item.revision_id)}>{item.title}</button>)}</div>
+    {selectedDocument && <><article className="panel"><div className="card-top"><strong>{selectedDocument.title}</strong><OriginalButton revisionId={selectedDocument.revision_id} /></div>
+      <p>{selectedDocument.source_fragment}</p><p className="notice">Предложенный срок: {selectedDocument.due_date || 'не задан'}. Это случайная демодата, не дата из документа.</p></article>
+      <form className="panel form" onSubmit={submit}><h3>Новый черновик</h3><label>Вопрос или предмет ответа<textarea value={question} onChange={event => setQuestion(event.target.value)} minLength={5} required /></label>
+        <label>Дата выполнения или планируемого выполнения<input type="date" value={completionDate} onChange={event => setCompletionDate(event.target.value)} required /></label>
+        <fieldset><legend>Мероприятие выполнено?</legend><label className="radio"><input type="radio" name="completed" checked={completed} onChange={() => setCompleted(true)} />Да</label><label className="radio"><input type="radio" name="completed" checked={!completed} onChange={() => setCompleted(false)} />Нет</label></fieldset>
+        <button disabled={busy}>{busy ? 'Создание…' : 'Создать редактируемый черновик'}</button><ErrorText error={error} />
+      </form></>}
+    {drafts.isLoading && <p role="status">Загрузка черновиков…</p>}<ErrorText error={drafts.error} />
+    {drafts.data?.map(item => <DraftEditor key={item.id} draft={item} revisionId={selected} canReview={['admin', 'lawyer'].includes(user.role)} />)}</>
+}
+
+function Deadlines({ user }: { user: User }) {
+  const client = useQueryClient()
+  const dashboard = useQuery({ queryKey: ['deadline-dashboard'], queryFn: () => api<DashboardItem[]>('/deadline-dashboard') })
+  const escalations = useQuery({ queryKey: ['director-escalations'], queryFn: () => api<Escalation[]>('/director-escalations'), enabled: ['admin', 'director'].includes(user.role) })
+  const [error, setError] = useState<unknown>(null)
+  const [busyId, setBusyId] = useState('')
+  async function escalate(revisionId: string) {
+    setBusyId(revisionId); setError(null)
+    try { await post(`/deadline-dashboard/${revisionId}/escalate`); await client.invalidateQueries({ queryKey: ['deadline-dashboard'] }); await client.invalidateQueries({ queryKey: ['director-escalations'] }) }
+    catch (err) { setError(err) } finally { setBusyId('') }
+  }
+  const items = dashboard.data || []
+  return <><header><span className="eyebrow">Модуль 3</span><h2>Контроль сроков</h2></header>
+    <div className="metrics"><div className="panel"><strong>{items.length}</strong><span>Документов со сроком</span></div><div className="panel"><strong>{items.filter(item => item.sla_state === 'overdue').length}</strong><span>Просрочено</span></div><div className="panel"><strong>{items.filter(item => item.sla_state === 'due_soon').length}</strong><span>Скоро срок</span></div></div>
+    {dashboard.isLoading && <p role="status">Загрузка SLA…</p>}<ErrorText error={dashboard.error || error} />
+    {dashboard.data?.length === 0 && <p className="empty">Опубликованных документов обязательств со сроком пока нет. Загрузите DOCX в модуле «Генератор».</p>}
+    {items.map(item => <article className="panel" key={item.revision_id}><div className="card-top"><h3>{item.title}</h3><span className={`badge ${item.sla_state}`}>{item.sla_state === 'overdue' ? 'Просрочено' : item.sla_state === 'due_soon' ? 'Скоро срок' : 'Предстоит'}</span></div>
+      <p><strong>SLA: {item.due_date}</strong> · {item.days_remaining < 0 ? `просрочено на ${-item.days_remaining} дн.` : `осталось ${item.days_remaining} дн.`}</p>
+      <p className="notice">Дата создана случайной демозаглушкой и не подтверждена документом.</p>
+      <div className="source-box"><strong>Связанный фрагмент документа</strong><p>{item.source_fragment || 'Фрагмент не найден'}</p><OriginalButton revisionId={item.revision_id} /></div>
+      {item.escalated_at ? <p className="muted">Эскалировано директору: {new Date(item.escalated_at).toLocaleString('ru-RU')}</p> : user.role !== 'director' &&
+        <button disabled={busyId === item.revision_id} onClick={() => escalate(item.revision_id)}>Эскалация директору</button>}
+    </article>)}
+    {['admin', 'director'].includes(user.role) && <section><h3>Эскалации для директора</h3><ErrorText error={escalations.error} />{escalations.data?.length === 0 && <p className="empty">Эскалаций нет.</p>}
+      {escalations.data?.map(item => <div className="panel compact" key={item.id}><strong>{item.title}</strong><span>{new Date(item.created_at).toLocaleString('ru-RU')}</span></div>)}</section>}
+  </>
 }
 
 export default function App() {
@@ -175,7 +196,8 @@ export default function App() {
   function logout() { setToken(''); setUser(null); client.clear(); setSection('consultations') }
   if (!current) return <Login onLogin={value => { client.clear(); setUser(value) }} />
   return <div className="shell"><aside className="sidebar"><div className="brand"><span className="mark">§</span><div>Юрист ЖКХ<small>Рабочее пространство</small></div></div>
-    <nav aria-label="Основные разделы">{([['consultations', 'Консультации'], ['obligations', 'Сроки'], ['prescriptions', 'Предписания'], ['sources', 'Источники']] as [Section, string][]).map(([id, label]) => <button key={id} className={section === id ? 'active' : ''} onClick={() => setSection(id)}>{label}</button>)}</nav>
+    <nav aria-label="Основные разделы">{([['consultations', 'Консультации'], ['generator', 'Генератор'], ['deadlines', 'Сроки и SLA']] as [Section, string][]).map(([id, label]) =>
+      <button key={id} className={section === id ? 'active' : ''} onClick={() => setSection(id)}>{label}</button>)}</nav>
     <div className="profile"><strong>{current.username}</strong><small>{current.role}</small><button onClick={logout}>Выйти</button></div></aside>
-    <main className="content">{section === 'consultations' && <Consultations />}{section === 'obligations' && <Obligations />}{section === 'prescriptions' && <Prescriptions user={current} />}{section === 'sources' && <Sources user={current} />}</main></div>
+    <main className="content">{section === 'consultations' && <Consultations user={current} />}{section === 'generator' && <Generator user={current} />}{section === 'deadlines' && <Deadlines user={current} />}</main></div>
 }
