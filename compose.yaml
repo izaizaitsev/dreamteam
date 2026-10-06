@@ -1,0 +1,107 @@
+services:
+
+
+  embedding:
+    image: ${EMBEDDING_IMAGE}
+    container_name: ${EMBEDDING_CONTAINER_NAME}
+    restart: ${RESTART_POLICY}
+
+    ports:
+      - "${EMBEDDING_PORT}:80"
+
+    volumes:
+      - ${EMBEDDING_CACHE_VOLUME}:/data
+
+    command:
+      - "--model-id"
+      - "${EMBEDDING_MODEL}"
+      - "--max-client-batch-size"
+      - "${EMBEDDING_MAX_BATCH_SIZE}"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities:
+                - gpu
+
+    networks:
+      - rag-network
+
+
+
+  reranker:
+    image: ${RERANKER_IMAGE}
+    container_name: ${RERANKER_CONTAINER_NAME}
+    restart: ${RESTART_POLICY}
+
+    ports:
+      - "${RERANKER_PORT}:8000"
+
+    volumes:
+      - ${RERANKER_CACHE_VOLUME}:/root/.cache/huggingface
+
+    ipc: host
+
+    command:
+      - "${RERANKER_MODEL}"
+      - "--served-model-name"
+      - "${RERANKER_MODEL_NAME}"
+      - "--runner"
+      - "pooling"
+      - "--hf-overrides"
+      - '{"architectures":["Qwen3ForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+      - "--gpu-memory-utilization"
+      - "${RERANKER_GPU_MEMORY_UTILIZATION}"
+      - "--max-model-len"
+      - "${RERANKER_MAX_MODEL_LEN}"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${RERANKER_GPU_COUNT}
+              capabilities:
+                - gpu
+
+    networks:
+      - rag-network
+
+
+  qdrant:
+    image: ${QDRANT_IMAGE}
+    container_name: ${QDRANT_CONTAINER_NAME}
+    restart: ${RESTART_POLICY}
+
+    ports:
+      - "${QDRANT_HTTP_PORT}:6333"
+      - "${QDRANT_GRPC_PORT}:6334"
+
+    volumes:
+      - ${QDRANT_STORAGE_VOLUME}:/qdrant/storage
+
+    environment:
+      QDRANT__LOG_LEVEL: ${QDRANT_LOG_LEVEL}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+
+    networks:
+      - rag-network
+
+
+networks:
+  rag-network:
+    name: ${DOCKER_NETWORK_NAME}
+
+
+volumes:
+  embedding-cache:
+    name: ${EMBEDDING_CACHE_VOLUME}
+
+  reranker-cache:
+    name: ${RERANKER_CACHE_VOLUME}
+
+  qdrant-storage:
+    name: ${QDRANT_STORAGE_VOLUME}
