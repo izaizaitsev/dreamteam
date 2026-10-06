@@ -1,0 +1,13 @@
+[
+  {
+    "external_id": "DEMO-001",
+    "source": "Bitrix24",
+    "title": "Протечка в квартире",
+    "text": "Прошу проверить протечку трубы в квартире и сообщить о результатах осмотра.",
+    "applicant": {"type": "resident", "name": "Иванов И.И."},
+    "object": {"building_id": "DEMO-HOUSE-1", "apartment_id": "48"},
+    "received_at": "2026-10-01T10:30:00+05:00",
+    "status": "NEW",
+    "context": {"building_info": {"building_id": "DEMO-HOUSE-1"}}
+  }
+]
