@@ -1,13 +1,17 @@
 """End-to-end workflow with local AI adapters replaced by deterministic fakes."""
 import unittest
+import json
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+from docx import Document
 
 from fastapi.testclient import TestClient
 from app import ai
 from app.main import app
 from app.settings import settings
 from app.credentials import gigachat_key
+from app import storage as s
 
 
 class WorkflowTest(unittest.TestCase):
@@ -93,6 +97,24 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(result["created"], 1)
         self.assertEqual(len(result["errors"]), 1)
         self.assertEqual(self.client.get("/api/index/status").json()["total"], 1)
+        document = Document()
+        document.add_paragraph("Уважаемый заявитель! Ваше обращение рассмотрено.")
+        buffer = BytesIO()
+        document.save(buffer)
+        attached = self.client.post("/api/cases/decision-file?external_id=R-1",
+            files={"file": ("answer.docx", buffer.getvalue(),
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+        self.assertEqual(attached.status_code, 200, attached.text)
+        case = s.one("SELECT * FROM cases WHERE external_id=?", ("R-1",))
+        self.assertIn("Уважаемый заявитель", case["decision_text"])
+        downloaded = self.client.get(f"/api/cases/{case['id']}/decision-file")
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertTrue(downloaded.content.startswith(b"PK"))
+        self.client.post("/api/import/resolved-cases", json=[
+            {"external_id": "R-1", "appeal_text": "Протечка", "decision_text": "Устаревший JSON"}])
+        self.assertIn("Уважаемый заявитель", s.one(
+            "SELECT decision_text FROM cases WHERE external_id=?", ("R-1",))["decision_text"])
+        Path(case["decision_file_uri"]).unlink()
         body = {"code": "LEAK_V1", "name": "Протечка", "body": "Уважаемый заявитель"}
         self.assertEqual(self.client.post("/api/templates", json=body).json()["version"], 1)
         self.assertEqual(self.client.post("/api/templates", json=body).json()["version"], 2)
@@ -121,6 +143,12 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(gigachat_key(), "test-authorization-key")
         self.assertNotIn("test-authorization-key", self.client.get(
             "/api/settings/gigachat", headers=admin).text)
+
+    def test_example_new_appeals_is_importable(self):
+        examples = json.loads(Path("examples/new-appeals.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(examples), 2)
+        self.assertEqual(self.client.post("/api/import/appeals", json=examples).json()["created"], 2)
+        self.assertIn("AI-юрист по вопросам ЖКХ", self.client.get("/").text)
 
 
 if __name__ == "__main__":

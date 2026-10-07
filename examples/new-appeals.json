@@ -1,0 +1,36 @@
+[
+  {
+    "external_id": "DEMO-NEW-001",
+    "source": "Bitrix24",
+    "title": "Протечка стояка",
+    "text": "В квартире обнаружена протечка стояка холодного водоснабжения. Прошу организовать осмотр и сообщить о принятых мерах.",
+    "applicant": {
+      "type": "resident",
+      "name": "Тестовый заявитель 1"
+    },
+    "object": {
+      "building_id": "DEMO-HOUSE-1",
+      "apartment_id": "DEMO-APT-48"
+    },
+    "received_at": "2026-10-09T10:30:00+05:00",
+    "due_at": "2026-11-08T23:59:00+05:00",
+    "status": "NEW"
+  },
+  {
+    "external_id": "DEMO-NEW-002",
+    "source": "Bitrix24",
+    "title": "Вопрос о начислении платы",
+    "text": "Прошу проверить начисление платы за содержание жилья и предоставить расчёт за последний месяц.",
+    "applicant": {
+      "type": "resident",
+      "name": "Тестовый заявитель 2"
+    },
+    "object": {
+      "building_id": "DEMO-HOUSE-2",
+      "apartment_id": "DEMO-APT-12"
+    },
+    "received_at": "2026-10-09T11:00:00+05:00",
+    "due_at": "2026-11-08T23:59:00+05:00",
+    "status": "NEW"
+  }
+]
