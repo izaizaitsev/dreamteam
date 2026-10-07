@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app import ai
 from app.main import app
 from app.settings import settings
+from app.credentials import gigachat_key
 
 
 class WorkflowTest(unittest.TestCase):
@@ -15,6 +16,10 @@ class WorkflowTest(unittest.TestCase):
         self.db_path = Path("app/data/test_workflow.sqlite3").resolve()
         self.db_path.unlink(missing_ok=True)
         object.__setattr__(settings, "database_path", str(self.db_path))
+        self.key_path = Path("app/data/test_gigachat_auth_key").resolve()
+        self.key_path.unlink(missing_ok=True)
+        self.original_key_path = settings.gigachat_key_path
+        object.__setattr__(settings, "gigachat_key_path", str(self.key_path))
         self.keys = (settings.api_key, settings.admin_api_key, settings.lawyer_api_key,
                      settings.operator_api_key)
         self.client = TestClient(app)
@@ -24,6 +29,8 @@ class WorkflowTest(unittest.TestCase):
         self.client.__exit__(None, None, None)
         for name, value in zip(("api_key", "admin_api_key", "lawyer_api_key", "operator_api_key"), self.keys):
             object.__setattr__(settings, name, value)
+        object.__setattr__(settings, "gigachat_key_path", self.original_key_path)
+        self.key_path.unlink(missing_ok=True)
         self.db_path.unlink(missing_ok=True)
 
     def test_import_process_review_and_versions(self):
@@ -54,6 +61,8 @@ class WorkflowTest(unittest.TestCase):
 
         with patch("app.ai.embed", fake_embed), patch("app.ai.retrieve", fake_retrieve), \
              patch.object(ai.gigachat, "structured", fake_complete):
+            self.assertEqual(self.client.post(f"/api/appeals/{appeal_id}/retrieve").status_code, 200)
+            self.assertEqual(self.client.get(f"/api/appeals/{appeal_id}").json()["status"], "NEW")
             response = self.client.post(f"/api/appeals/{appeal_id}/process")
             self.assertEqual(response.status_code, 200, response.text)
             data = response.json()
@@ -104,6 +113,14 @@ class WorkflowTest(unittest.TestCase):
             json={"code": "A", "name": "A", "body": "A"}).status_code, 200)
         self.assertEqual(self.client.get("/api/audit", headers=operator).status_code, 403)
         self.assertEqual(self.client.get("/api/me", headers=lawyer).json()["role"], "LAWYER")
+        self.assertEqual(self.client.put("/api/settings/gigachat", headers=operator,
+            json={"auth_key": "test-authorization-key"}).status_code, 403)
+        response = self.client.put("/api/settings/gigachat", headers=admin,
+            json={"auth_key": "test-authorization-key"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(gigachat_key(), "test-authorization-key")
+        self.assertNotIn("test-authorization-key", self.client.get(
+            "/api/settings/gigachat", headers=admin).text)
 
 
 if __name__ == "__main__":

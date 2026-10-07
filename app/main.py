@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from . import ai, pipeline as p, storage as s
 from .importers import BitrixJsonAdapter, records, normalize_text
 from .settings import settings
+from .credentials import gigachat_key, save_gigachat_key
 
 
 @asynccontextmanager
@@ -67,7 +68,7 @@ def health_db():
 
 @app.get("/health/gigachat")
 def health_gigachat():
-    return {"configured": bool(settings.gigachat_key), "model": settings.gigachat_model}
+    return {"configured": bool(gigachat_key()), "model": settings.gigachat_model}
 
 
 @app.get("/health/embedding")
@@ -93,7 +94,26 @@ async def health_reranker():
 @app.get("/api/config", dependencies=[Depends(auth)])
 def config():
     return {"embedding_model": settings.embedding_model, "reranker_model": settings.reranker_model,
-            "gigachat_model": settings.gigachat_model, "gigachat_configured": bool(settings.gigachat_key)}
+            "gigachat_model": settings.gigachat_model, "gigachat_configured": bool(gigachat_key())}
+
+
+@app.get("/api/settings/gigachat", dependencies=[Depends(admin)])
+def gigachat_settings():
+    return {"configured": bool(gigachat_key()), "model": settings.gigachat_model}
+
+
+class GigaChatKeyInput(BaseModel):
+    auth_key: str = Field(min_length=16)
+
+
+@app.put("/api/settings/gigachat", dependencies=[Depends(admin)])
+async def put_gigachat_settings(body: GigaChatKeyInput):
+    save_gigachat_key(body.auth_key)
+    async with ai.gigachat.lock:
+        ai.gigachat.token = None
+        ai.gigachat.expires_at = 0
+    s.audit(None, "gigachat_key_updated", details={"source": "web_settings"})
+    return {"configured": True, "model": settings.gigachat_model}
 
 
 @app.get("/api/me")
@@ -317,7 +337,7 @@ def export_docx(draft_id: str):
         raise HTTPException(404, "Черновик не найден")
     if draft["status"] != "APPROVED":
         raise HTTPException(409, "Экспорт итогового ответа возможен после одобрения")
-    path = Path("app/data/documents") / f"{draft_id}.docx"
+    path = Path(settings.storage_base_path) / f"{draft_id}.docx"
     path.parent.mkdir(parents=True, exist_ok=True)
     document = Document()
     document.add_heading("Ответ на обращение", level=1)

@@ -10,6 +10,8 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 @dataclass(frozen=True)
 class Settings:
     database_path: str = os.getenv("DATABASE_PATH", "app/data/appeals.sqlite3")
+    storage_base_path: str = os.getenv("STORAGE_BASE_PATH", "app/data/documents")
+    gigachat_key_path: str = os.getenv("GIGACHAT_AUTH_KEY_FILE", "app/data/gigachat_auth_key")
     api_key: str = os.getenv("APP_API_KEY", "")
     admin_api_key: str = os.getenv("ADMIN_API_KEY", "")
     lawyer_api_key: str = os.getenv("LAWYER_API_KEY", "")
