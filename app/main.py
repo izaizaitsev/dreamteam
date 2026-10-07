@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import httpx
 import hmac
+import os
+from io import BytesIO
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from docx import Document
 from pydantic import BaseModel, Field
@@ -21,7 +23,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="AI Legal Copilot — входящие обращения", lifespan=lifespan)
+app = FastAPI(title="AI-юрист по вопросам ЖКХ", lifespan=lifespan)
 
 
 def auth(x_api_key: str | None = Header(default=None)):
@@ -54,6 +56,18 @@ def fail(exc: Exception):
 @app.get("/")
 def index():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
+
+
+@app.get("/examples/new-appeals.json")
+def new_appeals_example():
+    return FileResponse(Path(__file__).resolve().parents[1] / "examples" / "new-appeals.json",
+                        media_type="application/json", filename="new-appeals.json")
+
+
+@app.get("/examples/resolved-cases.json")
+def resolved_cases_example():
+    return FileResponse(Path(__file__).resolve().parents[1] / "examples" / "resolved-cases.json",
+                        media_type="application/json", filename="resolved-cases.json")
 
 
 @app.get("/health")
@@ -172,9 +186,16 @@ async def import_cases(request: Request, index_now: bool = False):
             text = normalize_text(item.get("appeal_text") or item.get("text") or "")
             if not external or not text:
                 raise ValueError("Нужны external_id и appeal_text")
-            existing = s.one("SELECT id FROM cases WHERE external_id=?", (external,))
+            existing = s.one("SELECT id,decision_text,decision_file_uri FROM cases WHERE external_id=?", (external,))
             case_id = existing["id"] if existing else s.uid()
-            values = (text, item.get("decision_text"), item.get("decision_file_uri"),
+            decision_text = item.get("decision_text") if "decision_text" in item else (existing["decision_text"] if existing else None)
+            decision_file_uri = item.get("decision_file_uri") or (existing["decision_file_uri"] if existing else None)
+            stored_path = Path(settings.storage_base_path) / "resolved" / f"{case_id}.docx"
+            if existing and stored_path.is_file():
+                # The uploaded Word document remains the source of the filled response.
+                decision_text = existing["decision_text"]
+                decision_file_uri = str(stored_path)
+            values = (text, decision_text, decision_file_uri,
                       item.get("category_code"), item.get("source"), item.get("building_id"),
                       json.dumps(item, ensure_ascii=False), s.now())
             if existing:
@@ -196,6 +217,53 @@ async def import_cases(request: Request, index_now: bool = False):
         except Exception as exc:
             report["errors"].append({"row": index + 1, "message": str(exc)})
     return report
+
+
+@app.post("/api/cases/decision-file", dependencies=[Depends(admin)])
+async def upload_decision_file(external_id: str, file: UploadFile = File(...)):
+    case = s.one("SELECT id FROM cases WHERE external_id=?", (external_id,))
+    if not case:
+        raise HTTPException(404, "Сначала импортируйте решённое обращение с этим external_id")
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        raise HTTPException(400, "Нужен файл .docx")
+    content = await file.read(10 * 1024 * 1024 + 1)
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Файл больше 10 МБ")
+    try:
+        document = Document(BytesIO(content))
+        parts = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+        for table in document.tables:
+            for row in table.rows:
+                parts.extend(cell.text.strip() for cell in row.cells if cell.text.strip())
+        decision_text = "\n".join(parts)
+    except Exception as exc:
+        raise HTTPException(400, "Не удалось прочитать Word-файл") from exc
+    if not decision_text:
+        raise HTTPException(400, "В Word-файле нет текстового решения")
+    path = Path(settings.storage_base_path) / "resolved" / f"{case['id']}.docx"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    try:
+        temporary.write_bytes(content)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    s.execute("UPDATE cases SET decision_text=?,decision_file_uri=?,updated_at=? WHERE id=?",
+              (decision_text, str(path), s.now(), case["id"]))
+    s.audit(None, "decision_file_uploaded", details={"case_id": case["id"]})
+    return {"case_id": case["id"], "external_id": external_id, "decision_file_uri": str(path),
+            "extracted_characters": len(decision_text)}
+
+
+@app.get("/api/cases/{case_id}/decision-file", dependencies=[Depends(auth)])
+def download_decision_file(case_id: str):
+    if not s.one("SELECT id FROM cases WHERE id=?", (case_id,)):
+        raise HTTPException(404, "Кейс не найден")
+    path = Path(settings.storage_base_path) / "resolved" / f"{case_id}.docx"
+    if not path.is_file():
+        raise HTTPException(404, "Word-файл для этого кейса не загружен")
+    return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        filename=f"resolved-{case_id}.docx")
 
 
 async def index_case(case_id: str):
