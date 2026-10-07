@@ -36,6 +36,8 @@ def set_status(appeal_id: str, status: str, error: str | None = None):
 
 async def search(appeal_id: str) -> list[dict]:
     row = appeal(appeal_id)
+    previous_status = row["status"] if row["status"] in {
+        "NEW", "READY_FOR_REVIEW", "APPROVED", "REJECTED", "CONTEXT_REQUIRED"} else "NEW"
     set_status(appeal_id, "EMBEDDING")
     vector = await ai.embed(row["text"], query=True)
     set_status(appeal_id, "RETRIEVAL")
@@ -48,6 +50,7 @@ async def search(appeal_id: str) -> list[dict]:
     set_status(appeal_id, "RERANKING")
     ranked = await ai.rerank(row["text"], cases)
     s.result(appeal_id, "similar_cases", ranked, settings.reranker_model)
+    set_status(appeal_id, previous_status)
     return ranked
 
 

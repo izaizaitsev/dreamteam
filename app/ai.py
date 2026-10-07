@@ -8,6 +8,7 @@ import uuid
 import httpx
 from pydantic import BaseModel, Field
 from .settings import settings
+from .credentials import gigachat_key
 
 COLLECTION = "resolved_appeals"
 
@@ -135,14 +136,15 @@ class GigaChatClient:
         self.lock = asyncio.Lock()
 
     async def access_token(self, force=False):
-        if not settings.gigachat_key:
-            raise ValueError("Задайте GIGACHAT_AUTH_KEY в .env")
+        key = gigachat_key()
+        if not key:
+            raise ValueError("Добавьте ключ GigaChat в разделе «Настройки»")
         async with self.lock:
             if self.token and not force and time.time() < self.expires_at - 120:
                 return self.token
             async with httpx.AsyncClient(timeout=30, verify=settings.verify_ssl) as client:
                 response = await client.post(settings.gigachat_oauth_url,
-                    headers={"Authorization": "Basic " + settings.gigachat_key,
+                    headers={"Authorization": "Basic " + key,
                              "RqUID": str(uuid.uuid4()), "Accept": "application/json"},
                     data={"scope": settings.gigachat_scope})
                 response.raise_for_status()
