@@ -138,7 +138,7 @@ async def generate_draft(appeal_id: str) -> dict:
         if item["status"] != "available" and item["key"] not in data["missing_information"]:
             data["missing_information"].append(item["key"])
     draft_id = s.uid()
-    s.execute("INSERT INTO drafts VALUES (?,?,?,?,?,?,?,?)",
+    s.execute("INSERT INTO drafts (id,appeal_id,ai_payload,edited_text,status,reviewer,reviewed_at,created_at) VALUES (?,?,?,?,?,?,?,?)",
               (draft_id, appeal_id, json.dumps(data, ensure_ascii=False), data["full_text"],
                "PENDING", None, None, s.now()))
     s.result(appeal_id, "draft", {"draft_id": draft_id, **data}, settings.gigachat_model, "draft-v1")

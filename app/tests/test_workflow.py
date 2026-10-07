@@ -15,11 +15,15 @@ class WorkflowTest(unittest.TestCase):
         self.db_path = Path("app/data/test_workflow.sqlite3").resolve()
         self.db_path.unlink(missing_ok=True)
         object.__setattr__(settings, "database_path", str(self.db_path))
+        self.keys = (settings.api_key, settings.admin_api_key, settings.lawyer_api_key,
+                     settings.operator_api_key)
         self.client = TestClient(app)
         self.client.__enter__()
 
     def tearDown(self):
         self.client.__exit__(None, None, None)
+        for name, value in zip(("api_key", "admin_api_key", "lawyer_api_key", "operator_api_key"), self.keys):
+            object.__setattr__(settings, name, value)
         self.db_path.unlink(missing_ok=True)
 
     def test_import_process_review_and_versions(self):
@@ -64,6 +68,9 @@ class WorkflowTest(unittest.TestCase):
                              "Проверенный ответ")
             self.assertEqual(self.client.post(f"/api/drafts/{draft_id}/approve", json={
                 "actor": "Юрист"}).status_code, 409)
+            word = self.client.get(f"/api/drafts/{draft_id}/export-docx")
+            self.assertEqual(word.status_code, 200)
+            self.assertTrue(word.content.startswith(b"PK"))
             resolved = self.client.post(f"/api/appeals/{appeal_id}/mark-resolved", json={
                 "actor": "Юрист", "index_now": False}).json()
             self.assertFalse(resolved["indexed"])
@@ -80,6 +87,23 @@ class WorkflowTest(unittest.TestCase):
         body = {"code": "LEAK_V1", "name": "Протечка", "body": "Уважаемый заявитель"}
         self.assertEqual(self.client.post("/api/templates", json=body).json()["version"], 1)
         self.assertEqual(self.client.post("/api/templates", json=body).json()["version"], 2)
+
+    def test_roles_restrict_mutations(self):
+        object.__setattr__(settings, "admin_api_key", "admin-test")
+        object.__setattr__(settings, "lawyer_api_key", "lawyer-test")
+        object.__setattr__(settings, "operator_api_key", "operator-test")
+        operator = {"X-API-Key": "operator-test"}
+        lawyer = {"X-API-Key": "lawyer-test"}
+        admin = {"X-API-Key": "admin-test"}
+        self.assertEqual(self.client.get("/api/appeals", headers=operator).status_code, 200)
+        self.assertEqual(self.client.post("/api/templates", headers=operator,
+            json={"code": "A", "name": "A", "body": "A"}).status_code, 403)
+        self.assertEqual(self.client.post("/api/templates", headers=lawyer,
+            json={"code": "A", "name": "A", "body": "A"}).status_code, 403)
+        self.assertEqual(self.client.post("/api/templates", headers=admin,
+            json={"code": "A", "name": "A", "body": "A"}).status_code, 200)
+        self.assertEqual(self.client.get("/api/audit", headers=operator).status_code, 403)
+        self.assertEqual(self.client.get("/api/me", headers=lawyer).json()["role"], "LAWYER")
 
 
 if __name__ == "__main__":

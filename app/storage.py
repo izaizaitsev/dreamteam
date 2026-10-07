@@ -48,7 +48,8 @@ CREATE INDEX IF NOT EXISTS results_appeal_kind ON results(appeal_id,kind,created
 CREATE TABLE IF NOT EXISTS drafts (
  id TEXT PRIMARY KEY, appeal_id TEXT NOT NULL, ai_payload TEXT NOT NULL,
  edited_text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING',
- reviewer TEXT, reviewed_at TEXT, created_at TEXT NOT NULL
+ reviewer TEXT, reviewed_at TEXT, created_at TEXT NOT NULL,
+ document_uri TEXT
 );
 CREATE INDEX IF NOT EXISTS drafts_appeal ON drafts(appeal_id,created_at);
 CREATE TABLE IF NOT EXISTS audit (
@@ -80,6 +81,9 @@ def db():
 def init_db():
     with db() as conn:
         conn.executescript(SCHEMA)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(drafts)")}
+        if "document_uri" not in columns:
+            conn.execute("ALTER TABLE drafts ADD COLUMN document_uri TEXT")
 
 
 def one(query: str, params: tuple = ()) -> dict | None:

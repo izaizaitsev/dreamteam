@@ -2,10 +2,12 @@
 from __future__ import annotations
 import json
 import httpx
+import hmac
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
+from docx import Document
 from pydantic import BaseModel, Field
 from . import ai, pipeline as p, storage as s
 from .importers import BitrixJsonAdapter, records, normalize_text
@@ -22,8 +24,24 @@ app = FastAPI(title="AI Legal Copilot — входящие обращения", 
 
 
 def auth(x_api_key: str | None = Header(default=None)):
-    if settings.api_key and x_api_key != settings.api_key:
-        raise HTTPException(401, "Неверный X-API-Key")
+    keys = {"ADMIN": [settings.admin_api_key, settings.api_key],
+            "LAWYER": [settings.lawyer_api_key], "OPERATOR": [settings.operator_api_key]}
+    if not any(key for values in keys.values() for key in values):
+        return "ADMIN"  # Localhost pilot only; set keys before exposing the service.
+    for role, values in keys.items():
+        if x_api_key and any(key and hmac.compare_digest(x_api_key, key) for key in values):
+            return role
+    raise HTTPException(401, "Неверный X-API-Key")
+
+
+def admin(role: str = Depends(auth)):
+    if role != "ADMIN":
+        raise HTTPException(403, "Требуется роль ADMIN")
+
+
+def lawyer(role: str = Depends(auth)):
+    if role not in {"ADMIN", "LAWYER"}:
+        raise HTTPException(403, "Требуется роль LAWYER")
 
 
 def fail(exc: Exception):
@@ -78,7 +96,12 @@ def config():
             "gigachat_model": settings.gigachat_model, "gigachat_configured": bool(settings.gigachat_key)}
 
 
-@app.post("/api/import/appeals", dependencies=[Depends(auth)])
+@app.get("/api/me")
+def me(role: str = Depends(auth)):
+    return {"role": role}
+
+
+@app.post("/api/import/appeals", dependencies=[Depends(admin)])
 async def import_appeals(request: Request):
     try:
         items = records(await request.json())
@@ -116,7 +139,7 @@ async def import_appeals(request: Request):
     return report
 
 
-@app.post("/api/import/resolved-cases", dependencies=[Depends(auth)])
+@app.post("/api/import/resolved-cases", dependencies=[Depends(admin)])
 async def import_cases(request: Request, index_now: bool = False):
     try:
         items = records(await request.json())
@@ -185,7 +208,7 @@ def detail(appeal_id: str):
         raise HTTPException(404, str(exc)) from exc
 
 
-@app.post("/api/appeals/{appeal_id}/process", dependencies=[Depends(auth)])
+@app.post("/api/appeals/{appeal_id}/process", dependencies=[Depends(lawyer)])
 async def process(appeal_id: str):
     try:
         return await p.process(appeal_id)
@@ -193,7 +216,7 @@ async def process(appeal_id: str):
         fail(exc)
 
 
-@app.post("/api/appeals/{appeal_id}/retrieve", dependencies=[Depends(auth)])
+@app.post("/api/appeals/{appeal_id}/retrieve", dependencies=[Depends(lawyer)])
 async def retrieve(appeal_id: str):
     try:
         return await p.search(appeal_id)
@@ -201,7 +224,7 @@ async def retrieve(appeal_id: str):
         fail(exc)
 
 
-@app.post("/api/appeals/{appeal_id}/classify", dependencies=[Depends(auth)])
+@app.post("/api/appeals/{appeal_id}/classify", dependencies=[Depends(lawyer)])
 async def classify(appeal_id: str):
     try:
         return await p.classify(appeal_id)
@@ -209,7 +232,7 @@ async def classify(appeal_id: str):
         fail(exc)
 
 
-@app.post("/api/appeals/{appeal_id}/load-context", dependencies=[Depends(auth)])
+@app.post("/api/appeals/{appeal_id}/load-context", dependencies=[Depends(lawyer)])
 def context(appeal_id: str):
     try:
         return p.load_context(appeal_id)
@@ -217,7 +240,7 @@ def context(appeal_id: str):
         fail(exc)
 
 
-@app.post("/api/appeals/{appeal_id}/generate-draft", dependencies=[Depends(auth)])
+@app.post("/api/appeals/{appeal_id}/generate-draft", dependencies=[Depends(lawyer)])
 async def generate(appeal_id: str):
     try:
         return await p.generate_draft(appeal_id)
@@ -245,7 +268,7 @@ class DraftEdit(BaseModel):
     actor: str = Field(min_length=1)
 
 
-@app.put("/api/drafts/{draft_id}", dependencies=[Depends(auth)])
+@app.put("/api/drafts/{draft_id}", dependencies=[Depends(lawyer)])
 def edit_draft(draft_id: str, body: DraftEdit):
     draft = s.one("SELECT * FROM drafts WHERE id=?", (draft_id,))
     if not draft:
@@ -277,14 +300,34 @@ def review_draft(draft_id: str, body: Review, state: str):
     return {"status": state, "draft_id": draft_id}
 
 
-@app.post("/api/drafts/{draft_id}/approve", dependencies=[Depends(auth)])
+@app.post("/api/drafts/{draft_id}/approve", dependencies=[Depends(lawyer)])
 def approve(draft_id: str, body: Review):
     return review_draft(draft_id, body, "APPROVED")
 
 
-@app.post("/api/drafts/{draft_id}/reject", dependencies=[Depends(auth)])
+@app.post("/api/drafts/{draft_id}/reject", dependencies=[Depends(lawyer)])
 def reject(draft_id: str, body: Review):
     return review_draft(draft_id, body, "REJECTED")
+
+
+@app.get("/api/drafts/{draft_id}/export-docx", dependencies=[Depends(lawyer)])
+def export_docx(draft_id: str):
+    draft = s.one("SELECT * FROM drafts WHERE id=?", (draft_id,))
+    if not draft:
+        raise HTTPException(404, "Черновик не найден")
+    if draft["status"] != "APPROVED":
+        raise HTTPException(409, "Экспорт итогового ответа возможен после одобрения")
+    path = Path("app/data/documents") / f"{draft_id}.docx"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = Document()
+    document.add_heading("Ответ на обращение", level=1)
+    for paragraph in draft["edited_text"].split("\n"):
+        document.add_paragraph(paragraph)
+    document.save(path)
+    s.execute("UPDATE drafts SET document_uri=? WHERE id=?", (str(path), draft_id))
+    s.audit(draft["appeal_id"], "docx_exported", draft["reviewer"], {"draft_id": draft_id})
+    return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        filename=f"response-{draft_id}.docx")
 
 
 class ResolveInput(BaseModel):
@@ -293,7 +336,7 @@ class ResolveInput(BaseModel):
     index_now: bool = False
 
 
-@app.post("/api/appeals/{appeal_id}/mark-resolved", dependencies=[Depends(auth)])
+@app.post("/api/appeals/{appeal_id}/mark-resolved", dependencies=[Depends(lawyer)])
 async def mark_resolved(appeal_id: str, body: ResolveInput):
     row = s.one("SELECT * FROM appeals WHERE id=?", (appeal_id,))
     if not row:
@@ -305,15 +348,16 @@ async def mark_resolved(appeal_id: str, body: ResolveInput):
     case_id = existing["id"] if existing else s.uid()
     classification = s.latest(appeal_id, "classification") or {}
     category = classification.get("category", {}).get("code")
+    decision_file_uri = body.decision_file_uri or draft["document_uri"]
     if existing:
         s.execute("UPDATE cases SET appeal_text=?,decision_text=?,decision_file_uri=?,category_code=?,indexed_at=NULL,updated_at=? WHERE id=?",
-            (row["text"], draft["edited_text"], body.decision_file_uri, category, s.now(), case_id))
+            (row["text"], draft["edited_text"], decision_file_uri, category, s.now(), case_id))
     else:
         s.execute("INSERT INTO cases VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (case_id, row["external_id"], row["text"], draft["edited_text"],
-             body.decision_file_uri, category, row["source"], row["building_id"],
+             decision_file_uri, category, row["source"], row["building_id"],
              json.dumps({"origin_appeal_id": appeal_id}, ensure_ascii=False), None, None, s.now(), s.now()))
-    s.audit(appeal_id, "resolved", body.actor, {"case_id": case_id, "decision_file_uri": body.decision_file_uri})
+    s.audit(appeal_id, "resolved", body.actor, {"case_id": case_id, "decision_file_uri": decision_file_uri})
     indexed = False
     if body.index_now:
         try:
@@ -338,7 +382,7 @@ class TemplateInput(BaseModel):
     active: bool = True
 
 
-@app.post("/api/templates", dependencies=[Depends(auth)])
+@app.post("/api/templates", dependencies=[Depends(admin)])
 def create_template(body: TemplateInput):
     version = s.one("SELECT MAX(version) AS n FROM templates WHERE code=?", (body.code,))["n"] or 0
     template_id = s.uid()
@@ -349,7 +393,7 @@ def create_template(body: TemplateInput):
     return {"id": template_id, "version": version + 1}
 
 
-@app.put("/api/templates/{template_id}", dependencies=[Depends(auth)])
+@app.put("/api/templates/{template_id}", dependencies=[Depends(admin)])
 def update_template(template_id: str, body: TemplateInput):
     if not s.one("SELECT id FROM templates WHERE id=?", (template_id,)):
         raise HTTPException(404, "Шаблон не найден")
@@ -358,12 +402,14 @@ def update_template(template_id: str, body: TemplateInput):
 
 @app.get("/api/index/status", dependencies=[Depends(auth)])
 def index_status():
-    return s.one("SELECT COUNT(*) AS total, SUM(CASE WHEN indexed_at IS NOT NULL THEN 1 ELSE 0 END) AS indexed FROM cases")
+    result = s.one("SELECT COUNT(*) AS total, SUM(CASE WHEN indexed_at IS NOT NULL AND embedding_model=? THEN 1 ELSE 0 END) AS indexed FROM cases", (settings.embedding_model,))
+    result["pending"] = result["total"] - (result["indexed"] or 0)
+    return result
 
 
-@app.post("/api/index/upsert", dependencies=[Depends(auth)])
+@app.post("/api/index/upsert", dependencies=[Depends(admin)])
 async def index_upsert():
-    cases = s.all_rows("SELECT id FROM cases WHERE indexed_at IS NULL")
+    cases = s.all_rows("SELECT id FROM cases WHERE indexed_at IS NULL OR embedding_model IS NULL OR embedding_model!=?", (settings.embedding_model,))
     report = {"total": len(cases), "indexed": 0, "errors": []}
     for case in cases:
         try:
@@ -374,13 +420,14 @@ async def index_upsert():
     return report
 
 
-@app.post("/api/index/rebuild", dependencies=[Depends(auth)])
+@app.post("/api/index/rebuild", dependencies=[Depends(admin)])
 async def index_rebuild():
+    await ai.delete_collection()
     s.execute("UPDATE cases SET indexed_at=NULL")
     return await index_upsert()
 
 
-@app.get("/api/audit", dependencies=[Depends(auth)])
+@app.get("/api/audit", dependencies=[Depends(admin)])
 def audit(appeal_id: str | None = None):
     if appeal_id:
         return s.all_rows("SELECT * FROM audit WHERE appeal_id=? ORDER BY created_at DESC LIMIT 200", (appeal_id,))

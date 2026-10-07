@@ -80,6 +80,13 @@ async def ensure_collection(size: int):
                 raise ValueError(f"Размерность индекса {actual}, embedding {size}; нужен rebuild")
 
 
+async def delete_collection():
+    async with httpx.AsyncClient(timeout=30, headers=qheaders()) as client:
+        response = await client.delete(f"{settings.qdrant_url.rstrip('/')}/collections/{COLLECTION}")
+        if response.status_code != 404:
+            response.raise_for_status()
+
+
 async def upsert_case(case: dict):
     vector = await embed(case["appeal_text"])
     await ensure_collection(len(vector))
