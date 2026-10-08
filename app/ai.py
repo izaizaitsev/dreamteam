@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import ssl
 import time
 import uuid
+from pathlib import Path
+import certifi
 import httpx
 from pydantic import BaseModel, Field
 from .settings import settings
@@ -129,6 +132,17 @@ async def rerank(query: str, cases: list[dict]) -> list[dict]:
     return output
 
 
+def gigachat_tls_verify() -> ssl.SSLContext | bool:
+    if not settings.verify_ssl:
+        return False
+    context = ssl.create_default_context(cafile=certifi.where())
+    root = Path(__file__).parent / "certs" / "russian_trusted_root_ca_pem.crt"
+    context.load_verify_locations(cafile=str(root))
+    if settings.gigachat_ca_bundle_file:
+        context.load_verify_locations(cafile=settings.gigachat_ca_bundle_file)
+    return context
+
+
 class GigaChatClient:
     def __init__(self):
         self.token: str | None = None
@@ -142,7 +156,7 @@ class GigaChatClient:
         async with self.lock:
             if self.token and not force and time.time() < self.expires_at - 120:
                 return self.token
-            async with httpx.AsyncClient(timeout=30, verify=settings.verify_ssl) as client:
+            async with httpx.AsyncClient(timeout=30, verify=gigachat_tls_verify()) as client:
                 response = await client.post(settings.gigachat_oauth_url,
                     headers={"Authorization": "Basic " + key,
                              "RqUID": str(uuid.uuid4()), "Accept": "application/json"},
@@ -154,7 +168,7 @@ class GigaChatClient:
             return self.token
 
     async def complete(self, messages: list[dict]) -> dict:
-        async with httpx.AsyncClient(timeout=90, verify=settings.verify_ssl) as client:
+        async with httpx.AsyncClient(timeout=90, verify=gigachat_tls_verify()) as client:
             for attempt in range(4):
                 token = await self.access_token(force=attempt > 0 and previous_status == 401)
                 response = await client.post(settings.gigachat_url.rstrip("/") + "/chat/completions",

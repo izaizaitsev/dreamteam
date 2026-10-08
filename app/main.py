@@ -53,6 +53,18 @@ def fail(exc: Exception):
     raise exc
 
 
+def ai_failure(exc: Exception):
+    if isinstance(exc, ValueError):
+        raise HTTPException(400, str(exc)) from exc
+    if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+        raise HTTPException(502, "Не удалось проверить сертификат GigaChat. Проверьте доступ к сервису и доверенный CA-сертификат.") from exc
+    if isinstance(exc, httpx.HTTPStatusError):
+        raise HTTPException(502, f"GigaChat вернул HTTP {exc.response.status_code}") from exc
+    if isinstance(exc, (httpx.HTTPError, OSError)):
+        raise HTTPException(502, f"Ошибка соединения с AI-сервисом: {exc}") from exc
+    raise HTTPException(502, f"AI-анализ не выполнен: {exc}") from exc
+
+
 @app.get("/")
 def index():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
@@ -300,8 +312,8 @@ def detail(appeal_id: str):
 async def process(appeal_id: str):
     try:
         return await p.process(appeal_id)
-    except ValueError as exc:
-        fail(exc)
+    except Exception as exc:
+        ai_failure(exc)
 
 
 @app.post("/api/appeals/{appeal_id}/retrieve", dependencies=[Depends(lawyer)])
@@ -316,8 +328,10 @@ async def retrieve(appeal_id: str):
 async def classify(appeal_id: str):
     try:
         return await p.classify(appeal_id)
-    except ValueError as exc:
-        fail(exc)
+    except Exception as exc:
+        if s.one("SELECT id FROM appeals WHERE id=?", (appeal_id,)):
+            p.set_status(appeal_id, "ERROR", f"CLASSIFYING: {exc}")
+        ai_failure(exc)
 
 
 @app.post("/api/appeals/{appeal_id}/load-context", dependencies=[Depends(lawyer)])
@@ -332,8 +346,10 @@ def context(appeal_id: str):
 async def generate(appeal_id: str):
     try:
         return await p.generate_draft(appeal_id)
-    except ValueError as exc:
-        fail(exc)
+    except Exception as exc:
+        if s.one("SELECT id FROM appeals WHERE id=?", (appeal_id,)):
+            p.set_status(appeal_id, "ERROR", f"DRAFTING: {exc}")
+        ai_failure(exc)
 
 
 @app.get("/api/appeals/{appeal_id}/similar-cases", dependencies=[Depends(auth)])

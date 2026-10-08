@@ -30,6 +30,7 @@ class Settings:
     gigachat_url: str = os.getenv("GIGACHAT_API_URL", "https://api.giga.chat/v1")
     gigachat_model: str = os.getenv("GIGACHAT_MODEL", "GigaChat-2-pro")
     verify_ssl: bool = os.getenv("GIGACHAT_VERIFY_SSL", "true").lower() == "true"
+    gigachat_ca_bundle_file: str = os.getenv("GIGACHAT_CA_BUNDLE_FILE", "")
     mask_pii: bool = os.getenv("LLM_MASK_PII", "false").lower() == "true"
 
 

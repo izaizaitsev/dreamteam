@@ -6,6 +6,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.34",
     "httpx>=0.28",
+    "certifi>=2024.0",
     "python-dotenv>=1.0",
     "python-multipart>=0.0.20",
     "python-docx>=1.2",
