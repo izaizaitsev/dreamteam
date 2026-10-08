@@ -1,6 +1,7 @@
 """Explicit, reviewable stages of appeal processing."""
 from __future__ import annotations
 import json
+import re
 from . import ai, storage as s
 from .settings import settings
 
@@ -10,15 +11,48 @@ CLASSIFIER_PROMPT = """Ты помощник юридического отдел
 case_type (typical|disputed|unknown), category ({code,name}), confidence (0..1),
 reasoning_summary, recommended_template_code, required_context ([{key,reason,required}]), warnings.
 Доступные ключи контекста: work_history, dispatch_requests, previous_appeals, building_info.
-Запрашивай только нужные ключи."""
+Запрашивай только нужные ключи. Если заявитель требует признать ответственность организации
+или возместить ущерб, укажи legal_required=true и case_type=disputed. Для требования о
+возмещении ущерба используй категорию PROPERTY_DAMAGE_CLAIM, если она подходит."""
 DRAFT_PROMPT = """Ты помощник юридического отдела управляющей компании. Создай только проект ответа.
 Не выдумывай факты, работы, даты, документы, нормы или данные заявителя. Похожие обращения служат
-примерами практики; запрещено переносить из них конкретные факты. Если данных нет, перечисли их
+примерами практики; запрещено переносить из них конкретные факты. Если передан шаблон,
+сформируй секции для его полей; итоговый текст будет собран приложением. Если данных нет, перечисли их
 в missing_information; противоречия перечисли в warnings. Верни JSON с полями subject,
 issue_summary, factual_section, work_section, legal_section, closing_section, full_text,
 used_case_ids, used_context_keys, missing_information, warnings, confidence (0..1)."""
 
 TOOL_KEYS = {"work_history", "dispatch_requests", "previous_appeals", "building_info"}
+TEMPLATE_FIELD = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
+
+
+def render_template(body: str, row: dict, draft: dict) -> tuple[str, list[str], list[str]]:
+    raw = json.loads(row["raw_payload"])
+    context = raw.get("context") if isinstance(raw.get("context"), dict) else {}
+    values = {
+        "title": row["title"], "applicant_name": row["applicant_name"],
+        "building_id": row["building_id"], "apartment_id": row["apartment_id"],
+        "received_at": row["received_at"], "appeal_text": row["text"],
+        **{key: context.get(key) for key in TOOL_KEYS},
+        **{key: draft.get(key) for key in (
+            "subject", "issue_summary", "factual_section", "work_section",
+            "legal_section", "closing_section")},
+    }
+    missing = []
+    used_context = []
+
+    def replace(match: re.Match) -> str:
+        key = match.group(1)
+        value = values.get(key)
+        if value is None or value == "":
+            if key not in missing:
+                missing.append(key)
+            return f"[требуется уточнить: {key}]"
+        if key in TOOL_KEYS and key not in used_context:
+            used_context.append(key)
+        return str(value) if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+    return TEMPLATE_FIELD.sub(replace, body), missing, used_context
 
 
 def appeal(appeal_id: str) -> dict:
@@ -135,7 +169,17 @@ async def generate_draft(appeal_id: str) -> dict:
     data["used_case_ids"] = [x for x in data["used_case_ids"] if x in allowed_cases]
     allowed_context = {c["key"] for c in context if c["status"] == "available"}
     data["used_context_keys"] = [x for x in data["used_context_keys"] if x in allowed_context]
-    if not template:
+    if template:
+        data["full_text"], missing_fields, used_context = render_template(template["body"], row, data)
+        data["template_code"] = template["code"]
+        data["template_version"] = template["version"]
+        for key in missing_fields:
+            if key not in data["missing_information"]:
+                data["missing_information"].append(key)
+        for key in used_context:
+            if key not in data["used_context_keys"]:
+                data["used_context_keys"].append(key)
+    else:
         data["warnings"].append("Шаблон не найден; проверьте оформление")
     for item in context:
         if item["status"] != "available" and item["key"] not in data["missing_information"]:
