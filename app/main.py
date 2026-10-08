@@ -82,6 +82,12 @@ def resolved_cases_example():
                         media_type="application/json", filename="resolved-cases.json")
 
 
+@app.get("/examples/legal-claim-demo.json")
+def legal_claim_example():
+    return FileResponse(Path(__file__).resolve().parents[1] / "examples" / "legal-claim-demo.json",
+                        media_type="application/json", filename="legal-claim-demo.json")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}

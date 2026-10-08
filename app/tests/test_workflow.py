@@ -53,6 +53,38 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("сертификат", response.json()["detail"])
         self.assertEqual(self.client.get(f"/api/appeals/{appeal_id}").json()["status"], "ERROR")
 
+    def test_legal_demo_fills_template(self):
+        example = self.client.get("/examples/legal-claim-demo.json").json()
+        self.assertEqual(self.client.post("/api/templates", json=example["template"]).status_code, 200)
+        self.assertEqual(self.client.post("/api/import/appeals", json=[example["appeal"]]).json()["created"], 1)
+        appeal_id = self.client.get("/api/appeals").json()[0]["id"]
+
+        async def fake_embed(text, query=False):
+            return [0.1, 0.2]
+
+        async def fake_retrieve(vector):
+            return []
+
+        async def fake_structured(schema, system, payload):
+            if schema is ai.Classification:
+                return ai.Classification(legal_required=True, case_type="disputed",
+                    category=ai.Category(code="PROPERTY_DAMAGE_CLAIM", name="Возмещение ущерба"),
+                    confidence=0.9, reasoning_summary="Требование о возмещении ущерба",
+                    recommended_template_code="DEMO_DAMAGE_CLAIM_V1",
+                    required_context=[ai.RequiredContext(key="work_history")]), {}
+            return ai.Draft(subject="Ответ", full_text="Текст модели", confidence=0.8), {}
+
+        with patch("app.ai.embed", fake_embed), patch("app.ai.retrieve", fake_retrieve), \
+             patch.object(ai.gigachat, "structured", fake_structured):
+            response = self.client.post(f"/api/appeals/{appeal_id}/process")
+        self.assertEqual(response.status_code, 200, response.text)
+        draft = response.json()["draft"]["ai_payload"]
+        self.assertEqual(draft["template_code"], "DEMO_DAMAGE_CLAIM_V1")
+        self.assertIn("Тестовый заявитель", draft["full_text"])
+        self.assertIn("Заявка DEMO-74", draft["full_text"])
+        self.assertNotIn("{{", draft["full_text"])
+        self.assertEqual(response.json()["draft"]["edited_text"], draft["full_text"])
+
     def test_import_process_review_and_versions(self):
         rows = [
             {"external_id": "A-1", "text": "Протекает труба", "applicant": {"name": "Иванов"},
