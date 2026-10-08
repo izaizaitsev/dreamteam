@@ -10,7 +10,8 @@
 let selected=null, view='appeals', currentRole='ADMIN';const content=document.getElementById('content');
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function notice(message,error=false){const n=document.getElementById('notice');n.textContent=message;n.className=error?'error':'success';setTimeout(()=>n.className='hidden',7000)}
-async function api(path,method='GET',data){const headers={};let body;if(data!==undefined){headers['Content-Type']='application/json';body=JSON.stringify(data)}const key=sessionStorage.getItem('appKey');if(key)headers['X-API-Key']=key;let res=await fetch(path,{method,headers,body});if(res.status===401){const entered=prompt('Введите ключ доступа к приложению');if(entered){sessionStorage.setItem('appKey',entered);return api(path,method,data)}}let payload=await res.json();if(!res.ok)throw Error(payload.detail||res.statusText);return payload}
+async function readApiResponse(response){const raw=await response.text();let payload;try{payload=raw?JSON.parse(raw):null}catch{payload=null}if(!response.ok){const detail=payload?.detail;throw Error(typeof detail==='string'?detail:(raw.trim()||response.statusText||`HTTP ${response.status}`))}if(payload===null)throw Error('Сервер вернул ответ без JSON');return payload}
+async function api(path,method='GET',data){const headers={};let body;if(data!==undefined){headers['Content-Type']='application/json';body=JSON.stringify(data)}const key=sessionStorage.getItem('appKey');if(key)headers['X-API-Key']=key;let res=await fetch(path,{method,headers,body});if(res.status===401){const entered=prompt('Введите ключ доступа к приложению');if(entered){sessionStorage.setItem('appKey',entered);return api(path,method,data)}}return readApiResponse(res)}
 async function action(fn){try{await fn()}catch(e){notice(e.message,true)}}
 function setView(next){view=next;selected=null;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));render()}
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>setView(b.dataset.view));
@@ -57,7 +58,7 @@ function imports(){
     const form=new FormData();form.append('file',selectedFile);
     const headers={};const key=sessionStorage.getItem('appKey');if(key)headers['X-API-Key']=key;
     const response=await fetch('/api/cases/decision-file?external_id='+encodeURIComponent(externalId),{method:'POST',headers,body:form});
-    const result=await response.json();if(!response.ok)throw Error(result.detail||'Не удалось загрузить Word');
+    const result=await readApiResponse(response);
     document.getElementById('report').textContent=JSON.stringify(result,null,2);notice('Word-файл решения сохранён');
   });
 }

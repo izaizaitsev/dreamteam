@@ -160,8 +160,9 @@ async def process(appeal_id: str):
             await generate_draft(appeal_id)
         return detail(appeal_id)
     except Exception as exc:
-        current = appeal(appeal_id)["status"]
-        set_status(appeal_id, "ERROR", f"{current}: {exc}")
+        row = s.one("SELECT status FROM appeals WHERE id=?", (appeal_id,))
+        if row:
+            set_status(appeal_id, "ERROR", f"{row['status']}: {exc}")
         raise
 
 

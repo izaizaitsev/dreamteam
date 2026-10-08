@@ -1,9 +1,11 @@
 """End-to-end workflow with local AI adapters replaced by deterministic fakes."""
 import unittest
 import json
+import ssl
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+import httpx
 from docx import Document
 
 from fastapi.testclient import TestClient
@@ -36,6 +38,20 @@ class WorkflowTest(unittest.TestCase):
         object.__setattr__(settings, "gigachat_key_path", self.original_key_path)
         self.key_path.unlink(missing_ok=True)
         self.db_path.unlink(missing_ok=True)
+
+    def test_gigachat_tls_and_analysis_error(self):
+        self.assertIsInstance(ai.gigachat_tls_verify(), ssl.SSLContext)
+        self.client.post("/api/import/appeals", json=[{"external_id": "SSL-1", "text": "Протечка трубы"}])
+        appeal_id = self.client.get("/api/appeals").json()[0]["id"]
+
+        async def fail_search(_appeal_id):
+            raise httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+
+        with patch("app.pipeline.search", fail_search):
+            response = self.client.post(f"/api/appeals/{appeal_id}/process")
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("сертификат", response.json()["detail"])
+        self.assertEqual(self.client.get(f"/api/appeals/{appeal_id}").json()["status"], "ERROR")
 
     def test_import_process_review_and_versions(self):
         rows = [
