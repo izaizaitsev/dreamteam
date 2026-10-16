@@ -2,8 +2,9 @@
 from __future__ import annotations
 import json
 import re
-from . import ai, storage as s
-from .settings import settings
+from .. import ai
+from ..repositories import sqlite as s
+from ..core.settings import settings
 
 CLASSIFIER_PROMPT = """Ты помощник юридического отдела управляющей компании. Классифицируй обращение.
 Не принимай окончательное решение и не выдумывай факты. Похожие кейсы являются примерами практики,

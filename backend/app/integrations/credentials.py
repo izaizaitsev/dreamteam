@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from .settings import settings
+from ..core.settings import settings
 
 
 def gigachat_key() -> str:

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .settings import settings
+from ..core.settings import settings
 
 
 def now() -> str:

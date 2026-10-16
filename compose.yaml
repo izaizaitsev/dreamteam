@@ -1,9 +1,9 @@
 services:
 
-  app:
+  backend:
     build:
       context: .
-      dockerfile: app/Dockerfile
+      dockerfile: backend/Dockerfile
     restart: ${RESTART_POLICY:-unless-stopped}
     environment:
       DATABASE_PATH: /data/appeals.sqlite3
@@ -30,13 +30,25 @@ services:
       RAG_RETRIEVAL_TOP_K: ${RAG_RETRIEVAL_TOP_K:-30}
       RAG_RERANK_TOP_K: ${RAG_RERANK_TOP_K:-8}
     ports:
-      - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-8000}:8000"
+      - "${APP_BIND_HOST:-127.0.0.1}:${BACKEND_PORT:-8001}:8000"
     volumes:
       - app-data:/data
     depends_on:
       - embedding
       - reranker
       - qdrant
+    networks:
+      - rag-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: ${RESTART_POLICY:-unless-stopped}
+    ports:
+      - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-8000}:80"
+    depends_on:
+      - backend
     networks:
       - rag-network
 

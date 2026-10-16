@@ -11,18 +11,18 @@ from docx import Document
 from fastapi.testclient import TestClient
 from app import ai
 from app.main import app
-from app.settings import settings
-from app.credentials import gigachat_key
-from app import storage as s
+from app.core.settings import settings
+from app.integrations.credentials import gigachat_key
+from app.repositories import sqlite as s
 
 
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
-        Path("app/data").mkdir(parents=True, exist_ok=True)
-        self.db_path = Path("app/data/test_workflow.sqlite3").resolve()
+        Path("backend/data").mkdir(parents=True, exist_ok=True)
+        self.db_path = Path("backend/data/test_workflow.sqlite3").resolve()
         self.db_path.unlink(missing_ok=True)
         object.__setattr__(settings, "database_path", str(self.db_path))
-        self.key_path = Path("app/data/test_gigachat_auth_key").resolve()
+        self.key_path = Path("backend/data/test_gigachat_auth_key").resolve()
         self.key_path.unlink(missing_ok=True)
         self.original_key_path = settings.gigachat_key_path
         object.__setattr__(settings, "gigachat_key_path", str(self.key_path))
@@ -47,14 +47,14 @@ class WorkflowTest(unittest.TestCase):
         async def fail_search(_appeal_id):
             raise httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
 
-        with patch("app.pipeline.search", fail_search):
+        with patch("app.services.processing.search", fail_search):
             response = self.client.post(f"/api/appeals/{appeal_id}/process")
         self.assertEqual(response.status_code, 502)
         self.assertIn("сертификат", response.json()["detail"])
         self.assertEqual(self.client.get(f"/api/appeals/{appeal_id}").json()["status"], "ERROR")
 
     def test_legal_demo_fills_template(self):
-        example = self.client.get("/examples/legal-claim-demo.json").json()
+        example = json.loads(Path("examples/legal-claim-demo.json").read_text(encoding="utf-8"))
         self.assertEqual(self.client.post("/api/templates", json=example["template"]).status_code, 200)
         self.assertEqual(self.client.post("/api/import/appeals", json=[example["appeal"]]).json()["created"], 1)
         appeal_id = self.client.get("/api/appeals").json()[0]["id"]
@@ -196,7 +196,7 @@ class WorkflowTest(unittest.TestCase):
         examples = json.loads(Path("examples/new-appeals.json").read_text(encoding="utf-8"))
         self.assertEqual(len(examples), 2)
         self.assertEqual(self.client.post("/api/import/appeals", json=examples).json()["created"], 2)
-        self.assertIn("AI-юрист по вопросам ЖКХ", self.client.get("/").text)
+        self.assertIn("AI-юрист по вопросам ЖКХ", Path("frontend/index.html").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

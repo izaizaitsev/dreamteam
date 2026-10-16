@@ -1,9 +1,15 @@
 .git
 .env
 .uv-cache
+app/
+.vscode/
 app/.venv
 app/.idea
 app/data
 app/__pycache__
 app/tests
+backend/.venv
+backend/data
+backend/tests
+backend/**/__pycache__
 **/*.pyc
