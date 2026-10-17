@@ -82,9 +82,8 @@ async def search(appeal_id: str) -> list[dict]:
         case = s.one("SELECT * FROM cases WHERE id=?", (hit["id"],))
         if case:
             cases.append({**case, **hit})
-    set_status(appeal_id, "RERANKING")
-    ranked = await ai.rerank(row["text"], cases)
-    s.result(appeal_id, "similar_cases", ranked, settings.reranker_model)
+    ranked = cases[:settings.retrieval_top_k]
+    s.result(appeal_id, "similar_cases", ranked, settings.embedding_model)
     set_status(appeal_id, previous_status)
     return ranked
 

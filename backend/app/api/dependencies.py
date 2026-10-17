@@ -42,7 +42,7 @@ def ai_failure(exc: Exception):
     if "CERTIFICATE_VERIFY_FAILED" in str(exc):
         raise HTTPException(502, "Не удалось проверить сертификат GigaChat. Проверьте доступ к сервису и доверенный CA-сертификат.") from exc
     if isinstance(exc, httpx.HTTPStatusError):
-        raise HTTPException(502, f"GigaChat вернул HTTP {exc.response.status_code}") from exc
+        raise HTTPException(502, f"AI-сервис вернул HTTP {exc.response.status_code}") from exc
     if isinstance(exc, (httpx.HTTPError, OSError)):
         raise HTTPException(502, f"Ошибка соединения с AI-сервисом: {exc}") from exc
     raise HTTPException(502, f"AI-анализ не выполнен: {exc}") from exc

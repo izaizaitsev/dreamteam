@@ -7,5 +7,8 @@ __pycache__/
 .pytest_cache/
 app/data/
 backend/data/
+frontend/node_modules/
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
 .uv-cache/
 .idea/

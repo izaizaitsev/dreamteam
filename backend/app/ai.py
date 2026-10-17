@@ -4,7 +4,6 @@ from .core.settings import settings
 from .schemas.ai import RequiredContext, Category, Classification, Draft
 from .integrations.embedding import embed
 from .integrations.vector_store import ensure_collection, delete_collection, upsert_case, retrieve
-from .integrations.reranker import rerank
 from .integrations.gigachat import GigaChatClient, gigachat_tls_verify, gigachat
 
 

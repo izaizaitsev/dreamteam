@@ -1,5 +1,4 @@
 services:
-
   backend:
     build:
       context: .
@@ -9,11 +8,11 @@ services:
       DATABASE_PATH: /data/appeals.sqlite3
       STORAGE_BASE_PATH: /data/documents
       GIGACHAT_AUTH_KEY_FILE: /data/gigachat_auth_key
-      EMBEDDING_BASE_URL: http://embedding:80
-      RERANKER_BASE_URL: http://reranker:8000
-      QDRANT_BASE_URL: http://qdrant:6333
+      EMBEDDING_API_KEY_FILE: /data/embedding_api_key
+      EMBEDDING_API_URL: ${EMBEDDING_API_URL:-https://foundation-models.api.cloud.ru/v1}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
-      RERANKER_MODEL_NAME: ${RERANKER_MODEL_NAME:-qwen3-reranker}
+      API_KEY: ${API_KEY:-}
+      QDRANT_BASE_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       APP_API_KEY: ${APP_API_KEY:-}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
@@ -27,15 +26,10 @@ services:
       GIGACHAT_VERIFY_SSL: ${GIGACHAT_VERIFY_SSL:-true}
       GIGACHAT_CA_BUNDLE_FILE: ${GIGACHAT_CA_BUNDLE_FILE:-}
       LLM_MASK_PII: ${LLM_MASK_PII:-false}
-      RAG_RETRIEVAL_TOP_K: ${RAG_RETRIEVAL_TOP_K:-30}
-      RAG_RERANK_TOP_K: ${RAG_RERANK_TOP_K:-8}
+      RAG_RETRIEVAL_TOP_K: ${RAG_RETRIEVAL_TOP_K:-8}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${BACKEND_PORT:-8001}:8000"
-    volumes:
-      - app-data:/data
     depends_on:
-      - embedding
-      - reranker
       - qdrant
     networks:
       - rag-network
@@ -45,118 +39,28 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     restart: ${RESTART_POLICY:-unless-stopped}
+    environment:
+      BACKEND_INTERNAL_URL: http://backend:8000
     ports:
-      - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-8000}:80"
+      - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-8000}:3000"
     depends_on:
       - backend
     networks:
       - rag-network
 
-
-  embedding:
-    image: ${EMBEDDING_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:86-1.9}
-    container_name: ${EMBEDDING_CONTAINER_NAME:-qwen3-embedding}
-    restart: ${RESTART_POLICY:-unless-stopped}
-
-    ports:
-      - "${APP_BIND_HOST:-127.0.0.1}:${EMBEDDING_PORT:-8080}:80"
-
-    volumes:
-      - embedding-cache:/data
-
-    command:
-      - "--model-id"
-      - "${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}"
-      - "--max-client-batch-size"
-      - "${EMBEDDING_MAX_BATCH_SIZE:-32}"
-
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities:
-                - gpu
-
-    networks:
-      - rag-network
-
-
-
-  reranker:
-    image: ${RERANKER_IMAGE:-vllm/vllm-openai:latest}
-    container_name: ${RERANKER_CONTAINER_NAME:-qwen3-reranker}
-    restart: ${RESTART_POLICY:-unless-stopped}
-
-    ports:
-      - "${APP_BIND_HOST:-127.0.0.1}:${RERANKER_PORT:-8081}:8000"
-
-    volumes:
-      - reranker-cache:/root/.cache/huggingface
-
-    ipc: host
-
-    command:
-      - "${RERANKER_MODEL:-Qwen/Qwen3-Reranker-0.6B}"
-      - "--served-model-name"
-      - "${RERANKER_MODEL_NAME:-qwen3-reranker}"
-      - "--runner"
-      - "pooling"
-      - "--hf-overrides"
-      - '{"architectures":["Qwen3ForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
-      - "--gpu-memory-utilization"
-      - "${RERANKER_GPU_MEMORY_UTILIZATION:-0.50}"
-      - "--max-model-len"
-      - "${RERANKER_MAX_MODEL_LEN:-4096}"
-
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: ${RERANKER_GPU_COUNT:-1}
-              capabilities:
-                - gpu
-
-    networks:
-      - rag-network
-
-
   qdrant:
     image: ${QDRANT_IMAGE:-qdrant/qdrant:latest}
     container_name: ${QDRANT_CONTAINER_NAME:-qdrant}
     restart: ${RESTART_POLICY:-unless-stopped}
-
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${QDRANT_HTTP_PORT:-6333}:6333"
       - "${APP_BIND_HOST:-127.0.0.1}:${QDRANT_GRPC_PORT:-6334}:6334"
-
-    volumes:
-      - qdrant-storage:/qdrant/storage
-
     environment:
       QDRANT__LOG_LEVEL: ${QDRANT_LOG_LEVEL:-INFO}
       QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
-
     networks:
       - rag-network
-
 
 networks:
   rag-network:
     name: ${DOCKER_NETWORK_NAME:-rag-network}
-
-
-volumes:
-  app-data:
-    name: practicum3-app-data
-
-  embedding-cache:
-    name: ${EMBEDDING_CACHE_VOLUME:-embedding-cache}
-
-  reranker-cache:
-    name: ${RERANKER_CACHE_VOLUME:-reranker-cache}
-
-  qdrant-storage:
-    name: ${QDRANT_STORAGE_VOLUME:-qdrant-storage}

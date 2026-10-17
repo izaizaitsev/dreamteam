@@ -185,6 +185,8 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(self.client.get("/api/me", headers=lawyer).json()["role"], "LAWYER")
         self.assertEqual(self.client.put("/api/settings/gigachat", headers=operator,
             json={"auth_key": "test-authorization-key"}).status_code, 403)
+        self.assertEqual(self.client.put("/api/settings/embedding", headers=operator,
+            json={"api_key": "test-embedding-secret"}).status_code, 403)
         response = self.client.put("/api/settings/gigachat", headers=admin,
             json={"auth_key": "test-authorization-key"})
         self.assertEqual(response.status_code, 200, response.text)
@@ -196,7 +198,7 @@ class WorkflowTest(unittest.TestCase):
         examples = json.loads(Path("examples/new-appeals.json").read_text(encoding="utf-8"))
         self.assertEqual(len(examples), 2)
         self.assertEqual(self.client.post("/api/import/appeals", json=examples).json()["created"], 2)
-        self.assertIn("AI-юрист по вопросам ЖКХ", Path("frontend/index.html").read_text(encoding="utf-8"))
+        self.assertIn("AI Legal Copilot", Path("frontend/app/layout.tsx").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
