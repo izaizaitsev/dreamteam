@@ -29,6 +29,8 @@ services:
       RAG_RETRIEVAL_TOP_K: ${RAG_RETRIEVAL_TOP_K:-8}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${BACKEND_PORT:-8001}:8000"
+    volumes:
+      - app-data:/data
     depends_on:
       - qdrant
     networks:
@@ -58,9 +60,17 @@ services:
     environment:
       QDRANT__LOG_LEVEL: ${QDRANT_LOG_LEVEL:-INFO}
       QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+    volumes:
+      - qdrant-storage:/qdrant/storage
     networks:
       - rag-network
 
 networks:
   rag-network:
     name: ${DOCKER_NETWORK_NAME:-rag-network}
+
+volumes:
+  app-data:
+    name: practicum3-app-data
+  qdrant-storage:
+    name: ${QDRANT_STORAGE_VOLUME:-qdrant-storage}
