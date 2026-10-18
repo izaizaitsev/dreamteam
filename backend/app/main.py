@@ -11,6 +11,6 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="AI-юрист по вопросам ЖКХ", lifespan=lifespan)
+app = FastAPI(title="DreamTeam", lifespan=lifespan)
 for module in (system, settings, imports, appeals, drafts, templates, index, audit):
     app.include_router(module.router)

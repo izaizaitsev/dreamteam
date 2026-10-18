@@ -30,7 +30,8 @@ class EmbeddingTest(unittest.TestCase):
 
         with patch("app.integrations.embedding.embedding_key", return_value="test-secret"), \
              patch("app.integrations.embedding.httpx.AsyncClient", side_effect=mock_client):
-            vector = asyncio.run(embedding.embed("Проверка", query=True))
+            with self.assertLogs("uvicorn.error", level="INFO") as logs:
+                vector = asyncio.run(embedding.embed("Проверка", query=True))
 
         self.assertEqual(vector, [0.1, 0.2])
         self.assertEqual(captured["url"], settings.embedding_url.rstrip("/") + "/embeddings")
@@ -38,6 +39,11 @@ class EmbeddingTest(unittest.TestCase):
         body = json.loads(captured["body"])
         self.assertEqual(body["model"], settings.embedding_model)
         self.assertIn("Query: Проверка", body["input"][0])
+        self.assertIn("Embedding request", logs.output[0])
+        self.assertIn("Embedding response", logs.output[1])
+        self.assertIn("dimensions=2", logs.output[1])
+        self.assertNotIn("test-secret", " ".join(logs.output))
+        self.assertNotIn("Проверка", " ".join(logs.output))
 
     def test_admin_can_save_key_without_echoing_it(self):
         Path("backend/data").mkdir(parents=True, exist_ok=True)

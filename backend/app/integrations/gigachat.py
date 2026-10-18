@@ -1,6 +1,7 @@
 """GigaChat OAuth, TLS and chat adapter."""
 import asyncio
 import json
+import logging
 import ssl
 import time
 import uuid
@@ -10,6 +11,8 @@ import httpx
 from pydantic import BaseModel
 from ..core.settings import settings
 from .credentials import gigachat_key
+
+logger = logging.getLogger("uvicorn.error")
 
 
 def gigachat_tls_verify() -> ssl.SSLContext | bool:
@@ -51,18 +54,44 @@ class GigaChatClient:
     async def complete(self, messages: list[dict]) -> dict:
         async with httpx.AsyncClient(timeout=90, verify=gigachat_tls_verify()) as client:
             for attempt in range(4):
-                token = await self.access_token(force=attempt > 0 and previous_status == 401)
-                response = await client.post(settings.gigachat_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": "Bearer " + token},
-                    json={"model": settings.gigachat_model, "messages": messages, "temperature": 0.1})
+                started = time.perf_counter()
+                logger.info("GigaChat request: model=%s attempt=%d", settings.gigachat_model, attempt + 1)
+                try:
+                    token = await self.access_token(force=attempt > 0 and previous_status == 401)
+                    response = await client.post(settings.gigachat_url.rstrip("/") + "/chat/completions",
+                        headers={"Authorization": "Bearer " + token},
+                        json={"model": settings.gigachat_model, "messages": messages, "temperature": 0.1})
+                except Exception as exc:
+                    status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                    logger.error("GigaChat failed: model=%s attempt=%d status=%s error=%s elapsed_ms=%.0f",
+                                 settings.gigachat_model, attempt + 1, status, type(exc).__name__,
+                                 (time.perf_counter() - started) * 1000)
+                    raise
                 previous_status = response.status_code
                 if response.status_code == 401 and attempt == 0:
+                    logger.warning("GigaChat retry: model=%s attempt=%d status=%d",
+                                   settings.gigachat_model, attempt + 1, response.status_code)
                     continue
                 if response.status_code in (408, 429, 500, 502, 503, 504) and attempt < 3:
+                    logger.warning("GigaChat retry: model=%s attempt=%d status=%d",
+                                   settings.gigachat_model, attempt + 1, response.status_code)
                     await asyncio.sleep(2 ** attempt)
                     continue
-                response.raise_for_status()
-                return response.json()
+                try:
+                    response.raise_for_status()
+                    data = response.json()
+                    if not isinstance(data, dict):
+                        raise ValueError("GigaChat response must be a JSON object")
+                except Exception as exc:
+                    logger.error("GigaChat failed: model=%s attempt=%d status=%d error=%s elapsed_ms=%.0f",
+                                 settings.gigachat_model, attempt + 1, response.status_code,
+                                 type(exc).__name__, (time.perf_counter() - started) * 1000)
+                    raise
+                usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+                logger.info("GigaChat response: model=%s attempt=%d status=%d total_tokens=%s elapsed_ms=%.0f",
+                            settings.gigachat_model, attempt + 1, response.status_code,
+                            usage.get("total_tokens"), (time.perf_counter() - started) * 1000)
+                return data
         raise RuntimeError("GigaChat не ответил после повторов")
 
     async def structured(self, schema: type[BaseModel], system: str, payload: dict) -> tuple[BaseModel, dict]:
@@ -74,6 +103,8 @@ class GigaChatClient:
             try:
                 return schema.model_validate(json.loads(content)), raw.get("usage", {})
             except (ValueError, KeyError) as exc:
+                logger.warning("GigaChat invalid structured response: model=%s schema=%s attempt=%d error=%s",
+                               settings.gigachat_model, schema.__name__, attempt + 1, type(exc).__name__)
                 if attempt:
                     raise ValueError("GigaChat вернул невалидный JSON: " + str(exc)) from exc
                 messages.append({"role": "assistant", "content": content})

@@ -41,7 +41,7 @@ export default function Dashboard() {
   return <div className="app-shell">
     {sidebarOpen && <button className="sidebar-scrim" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)}/>}
     <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-      <div className="brand"><span className="brand-mark"><Icon name="spark" size={22}/></span><div><strong>Legal Copilot</strong><small>ЖКХ · рабочее пространство</small></div></div>
+      <div className="brand"><span className="brand-mark"><Icon name="spark" size={22}/></span><div><strong>DreamTeam</strong></div></div>
       <div className="sidebar-label">РАБОЧЕЕ МЕСТО</div>
       <nav aria-label="Основная навигация" className="sidebar-nav">
         {navigation.filter(item => role === "ADMIN" || item.id === "appeals").map(item =>
@@ -50,7 +50,7 @@ export default function Dashboard() {
       <div className="sidebar-bottom"><span className="online-dot"/><div><strong>Система активна</strong><small>Внутренний контур</small></div></div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><button className="menu-button" aria-label="Открыть меню" onClick={() => setSidebarOpen(true)}><Icon name="grid"/></button><div className="breadcrumbs"><span>Рабочее пространство</span><Icon name="chevron" size={14}/><strong>{pageTitle}</strong></div><div className="topbar-right"><span className="role-label"><Icon name="shield" size={15}/>{role}</span><span className="avatar">{role[0]}</span></div></header>
+      <header className="topbar"><button className="menu-button" aria-label="Открыть меню" onClick={() => setSidebarOpen(true)}><Icon name="grid"/></button><div className="breadcrumbs"><span>DreamTeam</span><Icon name="chevron" size={14}/><strong>{pageTitle}</strong></div><div className="topbar-right"><span className="role-label"><Icon name="shield" size={15}/>{role}</span><span className="avatar">{role[0]}</span></div></header>
       <main className="content-wrap">
         {view === "appeals" && <Appeals key={selected || "list"} selected={selected} onSelect={setSelected} role={role} {...common}/>}
         {view === "import" && <ImportView onOpenAppeal={(id) => { setSelected(id); setView("appeals"); }} {...common}/>}
