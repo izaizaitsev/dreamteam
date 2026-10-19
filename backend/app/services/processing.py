@@ -9,7 +9,7 @@ from ..core.settings import settings
 CLASSIFIER_PROMPT = """Ты помощник юридического отдела управляющей компании. Классифицируй обращение.
 Не принимай окончательное решение и не выдумывай факты. Похожие кейсы являются примерами практики,
 не источником фактов о текущем обращении. Верни JSON с полями legal_required (bool),
-case_type (typical|disputed|unknown), category ({code,name}), confidence (0..1),
+case_type (typical|disputed|unknown), category ({code,name}),
 reasoning_summary, recommended_template_code, required_context ([{key,reason,required}]), warnings.
 Доступные ключи контекста: work_history, dispatch_requests, previous_appeals, building_info.
 Запрашивай только нужные ключи. Если заявитель требует признать ответственность организации
@@ -25,7 +25,7 @@ DRAFT_PROMPT = """Ты помощник юридического отдела у
 Если шаблона нет, обязательно верни непустой full_text. Если данных нет, перечисли их
 в missing_information; противоречия перечисли в warnings. Верни JSON с полями subject,
 issue_summary, factual_section, work_section, legal_section, closing_section, full_text,
-used_case_ids, used_context_keys, missing_information, warnings, confidence (0..1)."""
+used_case_ids, used_context_keys, missing_information, warnings."""
 
 TOOL_KEYS = {"work_history", "dispatch_requests", "previous_appeals", "building_info"}
 TEMPLATE_FIELD = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
@@ -223,11 +223,14 @@ def detail(appeal_id: str) -> dict:
     row = appeal(appeal_id)
     row["raw_payload"] = json.loads(row["raw_payload"])
     row["classification"] = s.latest(appeal_id, "classification")
+    if row["classification"]:
+        row["classification"].pop("confidence", None)  # Legacy stored results.
     row["similar_cases"] = s.latest(appeal_id, "similar_cases") or []
     row["context"] = s.latest(appeal_id, "context") or []
     draft = s.one("SELECT * FROM drafts WHERE appeal_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1", (appeal_id,))
     if draft:
         draft["ai_payload"] = json.loads(draft["ai_payload"])
+        draft["ai_payload"].pop("confidence", None)
     row["draft"] = draft
     row["audit"] = s.all_rows("SELECT * FROM audit WHERE appeal_id=? ORDER BY created_at DESC", (appeal_id,))
     return row

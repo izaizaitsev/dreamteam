@@ -12,7 +12,7 @@ from app.schemas.ai import Draft
 
 class GigaChatLoggingTest(unittest.TestCase):
     def test_empty_full_text_is_valid_when_template_renders_it(self):
-        draft = {"subject": "Претензия", "full_text": "", "confidence": 0.8}
+        draft = {"subject": "Претензия", "full_text": ""}
         reply = {"choices": [{"message": {"content": json.dumps(draft)}}]}
         with patch.object(GigaChatClient, "complete", new=AsyncMock(return_value=reply)) as complete:
             parsed, _ = asyncio.run(GigaChatClient().structured(
@@ -22,9 +22,9 @@ class GigaChatLoggingTest(unittest.TestCase):
 
     def test_empty_full_text_without_template_is_retried(self):
         empty = {"choices": [{"message": {"content": json.dumps(
-            {"subject": "Ответ", "full_text": "", "confidence": 0.8})}}]}
+            {"subject": "Ответ", "full_text": ""})}}]}
         filled = {"choices": [{"message": {"content": json.dumps(
-            {"subject": "Ответ", "full_text": "Текст ответа", "confidence": 0.8})}}]}
+            {"subject": "Ответ", "full_text": "Текст ответа"})}}]}
         with patch.object(GigaChatClient, "complete", new=AsyncMock(side_effect=[empty, filled])) as complete:
             with self.assertLogs("uvicorn.error", level="WARNING"):
                 parsed, _ = asyncio.run(GigaChatClient().structured(Draft, "system", {"template": None}))
@@ -35,7 +35,7 @@ class GigaChatLoggingTest(unittest.TestCase):
         reply = {"choices": [{"message": {"content": json.dumps({
             "subject": "Ответ", "factual_section": "Установленные обстоятельства.",
             "closing_section": "Просим предоставить документы.",
-            "full_text": "", "confidence": 0.8,
+            "full_text": "",
         })}}]}
         with patch.object(GigaChatClient, "complete", new=AsyncMock(return_value=reply)) as complete:
             parsed, _ = asyncio.run(GigaChatClient().structured(Draft, "system", {"template": None}))

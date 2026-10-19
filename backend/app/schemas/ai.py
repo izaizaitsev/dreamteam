@@ -18,7 +18,6 @@ class Classification(BaseModel):
     legal_required: bool
     case_type: str
     category: Category
-    confidence: float = Field(ge=0, le=1)
     reasoning_summary: str
     recommended_template_code: str | None = None
     required_context: list[RequiredContext] = []
@@ -39,4 +38,3 @@ class Draft(BaseModel):
     used_context_keys: list[str] = []
     missing_information: list[str] = []
     warnings: list[str] = []
-    confidence: float = Field(ge=0, le=1)

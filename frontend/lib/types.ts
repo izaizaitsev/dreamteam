@@ -18,7 +18,6 @@ export type Classification = {
   legal_required: boolean;
   case_type: string;
   category?: { code: string; name: string };
-  confidence: number;
   reasoning_summary: string;
   recommended_template_code?: string | null;
   required_context: { key: string; reason: string }[];
@@ -35,7 +34,6 @@ export type SimilarCase = {
 };
 
 export type DraftPayload = {
-  confidence: number;
   full_text: string;
   missing_information: string[];
   warnings: string[];

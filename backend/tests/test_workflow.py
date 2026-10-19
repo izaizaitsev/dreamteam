@@ -70,10 +70,10 @@ class WorkflowTest(unittest.TestCase):
             if schema is ai.Classification:
                 return ai.Classification(legal_required=True, case_type="disputed",
                     category=ai.Category(code="PROPERTY_DAMAGE_CLAIM", name="Возмещение ущерба"),
-                    confidence=0.9, reasoning_summary="Требование о возмещении ущерба",
+                    reasoning_summary="Требование о возмещении ущерба",
                     recommended_template_code="DEMO_DAMAGE_CLAIM_V1",
                     required_context=[ai.RequiredContext(key="work_history")]), {}
-            return ai.Draft(subject="Ответ", full_text="Текст модели", confidence=0.8), {}
+            return ai.Draft(subject="Ответ", full_text="Текст модели"), {}
 
         with patch("app.ai.embed", fake_embed), patch("app.ai.retrieve", fake_retrieve), \
              patch.object(ai.gigachat, "structured", fake_structured):
@@ -112,7 +112,7 @@ class WorkflowTest(unittest.TestCase):
         async def fake_structured(schema, system, payload):
             self.assertEqual(payload["template"], AIR_CONDITIONER_CLAIM["body"])
             return ai.Draft(subject="Претензия", legal_section="Требуется проверка согласований.",
-                            full_text="", confidence=0.8), {}
+                            full_text=""), {}
 
         with patch.object(ai.gigachat, "structured", fake_structured):
             response = self.client.post(f"/api/appeals/{appeal_id}/generate-draft")
@@ -143,11 +143,11 @@ class WorkflowTest(unittest.TestCase):
         async def fake_complete(schema, system, payload):
             if schema is ai.Classification:
                 return ai.Classification(legal_required=True, case_type="typical",
-                    category=ai.Category(code="LEAK", name="Протечка"), confidence=0.8,
+                    category=ai.Category(code="LEAK", name="Протечка"),
                     reasoning_summary="Требуется проверка", required_context=[
                         ai.RequiredContext(key="building_info")]), {"total_tokens": 10}
             return ai.Draft(subject="Ответ", full_text="Проект ответа",
-                            confidence=0.7, used_context_keys=["building_info"]), {"total_tokens": 20}
+                            used_context_keys=["building_info"]), {"total_tokens": 20}
 
         with patch("app.ai.embed", fake_embed), patch("app.ai.retrieve", fake_retrieve), \
              patch.object(ai.gigachat, "structured", fake_complete):
