@@ -33,7 +33,8 @@ class Draft(BaseModel):
     work_section: str = ""
     legal_section: str = ""
     closing_section: str = ""
-    full_text: str = Field(min_length=1)
+    # A stored template assembles the final text from the section fields.
+    full_text: str = ""
     used_case_ids: list[str] = []
     used_context_keys: list[str] = []
     missing_information: list[str] = []

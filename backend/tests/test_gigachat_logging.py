@@ -1,14 +1,48 @@
 """Model request logs record outcomes without credentials or prompt content."""
 import asyncio
+import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
 import httpx
 
 from app.integrations.gigachat import GigaChatClient
+from app.schemas.ai import Draft
 
 
 class GigaChatLoggingTest(unittest.TestCase):
+    def test_empty_full_text_is_valid_when_template_renders_it(self):
+        draft = {"subject": "Претензия", "full_text": "", "confidence": 0.8}
+        reply = {"choices": [{"message": {"content": json.dumps(draft)}}]}
+        with patch.object(GigaChatClient, "complete", new=AsyncMock(return_value=reply)) as complete:
+            parsed, _ = asyncio.run(GigaChatClient().structured(
+                Draft, "system", {"template": "Тема: {{subject}}"}))
+        self.assertEqual(parsed.full_text, "")
+        self.assertEqual(complete.await_count, 1)
+
+    def test_empty_full_text_without_template_is_retried(self):
+        empty = {"choices": [{"message": {"content": json.dumps(
+            {"subject": "Ответ", "full_text": "", "confidence": 0.8})}}]}
+        filled = {"choices": [{"message": {"content": json.dumps(
+            {"subject": "Ответ", "full_text": "Текст ответа", "confidence": 0.8})}}]}
+        with patch.object(GigaChatClient, "complete", new=AsyncMock(side_effect=[empty, filled])) as complete:
+            with self.assertLogs("uvicorn.error", level="WARNING"):
+                parsed, _ = asyncio.run(GigaChatClient().structured(Draft, "system", {"template": None}))
+        self.assertEqual(parsed.full_text, "Текст ответа")
+        self.assertEqual(complete.await_count, 2)
+
+    def test_draft_text_is_assembled_from_sections_without_template(self):
+        reply = {"choices": [{"message": {"content": json.dumps({
+            "subject": "Ответ", "factual_section": "Установленные обстоятельства.",
+            "closing_section": "Просим предоставить документы.",
+            "full_text": "", "confidence": 0.8,
+        })}}]}
+        with patch.object(GigaChatClient, "complete", new=AsyncMock(return_value=reply)) as complete:
+            parsed, _ = asyncio.run(GigaChatClient().structured(Draft, "system", {"template": None}))
+        self.assertIn("Установленные обстоятельства.", parsed.full_text)
+        self.assertIn("Просим предоставить документы.", parsed.full_text)
+        self.assertEqual(complete.await_count, 1)
+
     def test_chat_response_is_logged_without_payload(self):
         def respond(request: httpx.Request):
             self.assertEqual(request.headers["Authorization"], "Bearer test-token")

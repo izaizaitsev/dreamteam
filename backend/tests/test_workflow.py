@@ -13,6 +13,7 @@ from app import ai
 from app.main import app
 from app.core.settings import settings
 from app.integrations.credentials import gigachat_key
+from app.services.builtin_templates import AIR_CONDITIONER_CLAIM
 from app.repositories import sqlite as s
 
 
@@ -84,6 +85,43 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("Заявка DEMO-74", draft["full_text"])
         self.assertNotIn("{{", draft["full_text"])
         self.assertEqual(response.json()["draft"]["edited_text"], draft["full_text"])
+
+    def test_create_draft_from_builtin_air_conditioner_template(self):
+        self.assertEqual(len(s.all_rows("SELECT id FROM templates WHERE code=?",
+            (AIR_CONDITIONER_CLAIM["code"],))), 1)
+        imported = self.client.post("/api/import/appeals", json=[{
+            "external_id": "AC-1", "text": "Кондиционер на фасаде дома",
+            "template_fields": {
+                "outgoing_number": "1", "outgoing_date": "23.10.2026",
+                "recipient_name": "Собственник помещения", "recipient_address": "Адрес получателя",
+                "sender_name": "Управляющая организация", "building_address": "Дом 1",
+                "management_basis": "договор управления", "inspection_details": "акт осмотра",
+                "inspection_act_details": "акт от 23.10.2026", "signatory_name": "Директор",
+                "executor_name": "Исполнитель", "executor_phone": "Контактный телефон",
+            },
+        }])
+        self.assertEqual(imported.json()["created"], 1)
+        appeal_id = self.client.get("/api/appeals").json()[0]["id"]
+        s.result(appeal_id, "classification", {
+            "legal_required": True, "case_type": "disputed",
+            "category": {"code": AIR_CONDITIONER_CLAIM["category_code"], "name": "Кондиционер"},
+            "recommended_template_code": AIR_CONDITIONER_CLAIM["code"],
+            "required_context": [],
+        })
+
+        async def fake_structured(schema, system, payload):
+            self.assertEqual(payload["template"], AIR_CONDITIONER_CLAIM["body"])
+            return ai.Draft(subject="Претензия", legal_section="Требуется проверка согласований.",
+                            full_text="", confidence=0.8), {}
+
+        with patch.object(ai.gigachat, "structured", fake_structured):
+            response = self.client.post(f"/api/appeals/{appeal_id}/generate-draft")
+        self.assertEqual(response.status_code, 200, response.text)
+        draft = response.json()
+        self.assertIn("Претензия о демонтаже кондиционера", draft["full_text"])
+        self.assertIn("Собственник помещения", draft["full_text"])
+        self.assertNotIn("{{", draft["full_text"])
+        self.assertEqual(draft["template_code"], AIR_CONDITIONER_CLAIM["code"])
 
     def test_import_process_review_and_versions(self):
         rows = [

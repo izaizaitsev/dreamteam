@@ -101,14 +101,24 @@ class GigaChatClient:
             raw = await self.complete(messages)
             content = raw["choices"][0]["message"]["content"]
             try:
-                return schema.model_validate(json.loads(content)), raw.get("usage", {})
+                parsed = schema.model_validate(json.loads(content))
+                if schema.__name__ == "Draft" and not payload.get("template") and not parsed.full_text.strip():
+                    sections = [parsed.issue_summary, parsed.factual_section, parsed.work_section,
+                                parsed.legal_section, parsed.closing_section]
+                    if not any(section.strip() for section in sections):
+                        raise ValueError("Пустой full_text и секции черновика при отсутствии шаблона")
+                    full_text = "\n\n".join(part.strip() for part in [parsed.subject, *sections] if part.strip())
+                    parsed = parsed.model_copy(update={"full_text": full_text})
+                return parsed, raw.get("usage", {})
             except (ValueError, KeyError) as exc:
                 logger.warning("GigaChat invalid structured response: model=%s schema=%s attempt=%d error=%s",
                                settings.gigachat_model, schema.__name__, attempt + 1, type(exc).__name__)
                 if attempt:
                     raise ValueError("GigaChat вернул невалидный JSON: " + str(exc)) from exc
                 messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": "Исправь ответ: верни только JSON нужной структуры."})
+                messages.append({"role": "user", "content":
+                                 "Исправь ответ: верни JSON нужной структуры. "
+                                 "Если шаблона нет, заполни full_text связным текстом черновика."})
         raise RuntimeError("Недоступный ответ модели")
 
 

@@ -14,11 +14,15 @@ reasoning_summary, recommended_template_code, required_context ([{key,reason,req
 Доступные ключи контекста: work_history, dispatch_requests, previous_appeals, building_info.
 Запрашивай только нужные ключи. Если заявитель требует признать ответственность организации
 или возместить ущерб, укажи legal_required=true и case_type=disputed. Для требования о
-возмещении ущерба используй категорию PROPERTY_DAMAGE_CLAIM, если она подходит."""
+возмещении ущерба используй категорию PROPERTY_DAMAGE_CLAIM, если она подходит.
+Шаблон претензии о демонтаже кондиционера подходит только для письма владельцу
+оборудования при наличии подтверждённых сведений об установке на фасаде;
+для ответа жителю, сообщившему о проблеме, не выбирай этот шаблон."""
 DRAFT_PROMPT = """Ты помощник юридического отдела управляющей компании. Создай только проект ответа.
 Не выдумывай факты, работы, даты, документы, нормы или данные заявителя. Похожие обращения служат
 примерами практики; запрещено переносить из них конкретные факты. Если передан шаблон,
-сформируй секции для его полей; итоговый текст будет собран приложением. Если данных нет, перечисли их
+сформируй секции для его полей; итоговый текст будет собран приложением, поэтому full_text может быть пустым.
+Если шаблона нет, обязательно верни непустой full_text. Если данных нет, перечисли их
 в missing_information; противоречия перечисли в warnings. Верни JSON с полями subject,
 issue_summary, factual_section, work_section, legal_section, closing_section, full_text,
 used_case_ids, used_context_keys, missing_information, warnings, confidence (0..1)."""
@@ -30,6 +34,7 @@ TEMPLATE_FIELD = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
 def render_template(body: str, row: dict, draft: dict) -> tuple[str, list[str], list[str]]:
     raw = json.loads(row["raw_payload"])
     context = raw.get("context") if isinstance(raw.get("context"), dict) else {}
+    template_fields = raw.get("template_fields") if isinstance(raw.get("template_fields"), dict) else {}
     values = {
         "title": row["title"], "applicant_name": row["applicant_name"],
         "building_id": row["building_id"], "apartment_id": row["apartment_id"],
@@ -39,6 +44,8 @@ def render_template(body: str, row: dict, draft: dict) -> tuple[str, list[str], 
             "subject", "issue_summary", "factual_section", "work_section",
             "legal_section", "closing_section")},
     }
+    values.update({key: value for key, value in template_fields.items()
+                   if key not in values and isinstance(value, (str, int, float))})
     missing = []
     used_context = []
 
@@ -180,6 +187,8 @@ async def generate_draft(appeal_id: str) -> dict:
             if key not in data["used_context_keys"]:
                 data["used_context_keys"].append(key)
     else:
+        if not data["full_text"].strip():
+            raise ValueError("GigaChat не вернул текст черновика")
         data["warnings"].append("Шаблон не найден; проверьте оформление")
     for item in context:
         if item["status"] != "available" and item["key"] not in data["missing_information"]:
