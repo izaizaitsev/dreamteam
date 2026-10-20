@@ -173,7 +173,31 @@ class WorkflowTest(unittest.TestCase):
             resolved = self.client.post(f"/api/appeals/{appeal_id}/mark-resolved", json={
                 "actor": "Юрист", "index_now": False}).json()
             self.assertFalse(resolved["indexed"])
+            self.assertEqual(resolved["status"], "RESOLVED")
+            self.assertEqual(self.client.get(f"/api/appeals/{appeal_id}").json()["status"], "RESOLVED")
+            self.assertEqual(self.client.get("/api/appeals").json()[0]["status"], "RESOLVED")
+            repeated = self.client.post(f"/api/appeals/{appeal_id}/mark-resolved", json={
+                "actor": "Юрист", "index_now": False}).json()
+            self.assertEqual(repeated["case_id"], resolved["case_id"])
+            self.assertEqual(s.one("SELECT COUNT(*) AS n FROM cases")["n"], 1)
             self.assertEqual(self.client.get("/api/index/status").json()["total"], 1)
+
+    def test_resolution_persists_when_indexing_fails(self):
+        self.assertEqual(self.client.post("/api/import/appeals", json=[{
+            "external_id": "INDEX-FAIL", "text": "Проверка индексации",
+        }]).json()["created"], 1)
+        appeal_id = self.client.get("/api/appeals").json()[0]["id"]
+        s.execute("INSERT INTO drafts (id,appeal_id,ai_payload,edited_text,status,reviewed_at,created_at) "
+                  "VALUES (?,?,?,?,?,?,?)",
+                  (s.uid(), appeal_id, "{}", "Одобренный ответ", "APPROVED", s.now(), s.now()))
+        with patch("app.api.appeals.index_case", side_effect=RuntimeError("index unavailable")):
+            response = self.client.post(f"/api/appeals/{appeal_id}/mark-resolved", json={
+                "actor": "Юрист", "index_now": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "RESOLVED")
+        self.assertFalse(response.json()["indexed"])
+        self.assertIn("index unavailable", response.json()["index_error"])
+        self.assertEqual(self.client.get(f"/api/appeals/{appeal_id}").json()["status"], "RESOLVED")
 
     def test_resolved_import_and_template_version(self):
         result = self.client.post("/api/import/resolved-cases", json=[

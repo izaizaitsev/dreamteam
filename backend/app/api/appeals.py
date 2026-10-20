@@ -112,6 +112,11 @@ async def mark_resolved(appeal_id: str, body: ResolveInput):
     row = s.one("SELECT * FROM appeals WHERE id=?", (appeal_id,))
     if not row:
         raise HTTPException(404, "Обращение не найдено")
+    if row["status"] == "RESOLVED":
+        saved = s.one("SELECT id,indexed_at FROM cases WHERE external_id=?", (row["external_id"],))
+        if saved:
+            return {"case_id": saved["id"], "indexed": bool(saved["indexed_at"]),
+                    "status": "RESOLVED"}
     draft = s.one("SELECT * FROM drafts WHERE appeal_id=? AND status='APPROVED' ORDER BY reviewed_at DESC LIMIT 1", (appeal_id,))
     if not draft:
         raise HTTPException(409, "Сначала одобрите ответ")
@@ -129,11 +134,13 @@ async def mark_resolved(appeal_id: str, body: ResolveInput):
              decision_file_uri, category, row["source"], row["building_id"],
              json.dumps({"origin_appeal_id": appeal_id}, ensure_ascii=False), None, None, s.now(), s.now()))
     s.audit(appeal_id, "resolved", body.actor, {"case_id": case_id, "decision_file_uri": decision_file_uri})
+    p.set_status(appeal_id, "RESOLVED")
     indexed = False
     if body.index_now:
         try:
             await index_case(case_id)
             indexed = True
         except Exception as exc:
-            return {"case_id": case_id, "indexed": False, "index_error": str(exc)}
-    return {"case_id": case_id, "indexed": indexed}
+            return {"case_id": case_id, "indexed": False, "status": "RESOLVED",
+                    "index_error": str(exc)}
+    return {"case_id": case_id, "indexed": indexed, "status": "RESOLVED"}
