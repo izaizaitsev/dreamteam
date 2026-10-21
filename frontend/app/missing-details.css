@@ -1,0 +1,31 @@
+.missing-details {
+  margin: 12px 0 16px;
+  border: 1px solid #f0dfb7;
+  border-radius: 8px;
+  background: #fffaf0;
+  color: #865f1d;
+}
+
+.missing-details summary {
+  cursor: pointer;
+  padding: 11px 14px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.missing-details summary:focus-visible {
+  outline: 2px solid #bb8b35;
+  outline-offset: 2px;
+}
+
+.missing-details[open] summary {
+  border-bottom: 1px solid #f0dfb7;
+}
+
+.missing-details ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 11px 18px 13px 34px;
+  font-size: 11px;
+}
