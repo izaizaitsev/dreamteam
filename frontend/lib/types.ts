@@ -14,16 +14,6 @@ export type AppealRow = {
   error?: string | null;
 };
 
-export type Classification = {
-  legal_required: boolean;
-  case_type: string;
-  category?: { code: string; name: string };
-  reasoning_summary: string;
-  recommended_template_code?: string | null;
-  required_context: { key: string; reason: string }[];
-  warnings: string[];
-};
-
 export type SimilarCase = {
   id: string;
   external_id: string;
@@ -50,7 +40,7 @@ export type Draft = {
 };
 
 export type AppealDetail = AppealRow & {
-  classification?: Classification | null;
+  legal_required: true;
   context: { key: string; status: string; data: unknown; source: string; warning?: string }[];
   similar_cases: SimilarCase[];
   draft?: Draft | null;

@@ -51,17 +51,6 @@ async def retrieve(appeal_id: str):
 
 
 
-@router.post("/api/appeals/{appeal_id}/classify", dependencies=[Depends(lawyer)])
-async def classify(appeal_id: str):
-    try:
-        return await p.classify(appeal_id)
-    except Exception as exc:
-        if s.one("SELECT id FROM appeals WHERE id=?", (appeal_id,)):
-            p.set_status(appeal_id, "ERROR", f"CLASSIFYING: {exc}")
-        ai_failure(exc)
-
-
-
 @router.post("/api/appeals/{appeal_id}/load-context", dependencies=[Depends(lawyer)])
 def context(appeal_id: str):
     try:
@@ -122,8 +111,7 @@ async def mark_resolved(appeal_id: str, body: ResolveInput):
         raise HTTPException(409, "Сначала одобрите ответ")
     existing = s.one("SELECT id FROM cases WHERE external_id=?", (row["external_id"],))
     case_id = existing["id"] if existing else s.uid()
-    classification = s.latest(appeal_id, "classification") or {}
-    category = classification.get("category", {}).get("code")
+    category = json.loads(row["raw_payload"]).get("category_code")
     decision_file_uri = body.decision_file_uri or draft["document_uri"]
     if existing:
         s.execute("UPDATE cases SET appeal_text=?,decision_text=?,decision_file_uri=?,category_code=?,indexed_at=NULL,updated_at=? WHERE id=?",

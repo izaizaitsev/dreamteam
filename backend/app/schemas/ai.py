@@ -1,28 +1,4 @@
-from pydantic import BaseModel, Field
-
-
-class RequiredContext(BaseModel):
-    key: str
-    reason: str = ""
-    required: bool = True
-
-
-
-class Category(BaseModel):
-    code: str = "OTHER"
-    name: str = "Другое"
-
-
-
-class Classification(BaseModel):
-    legal_required: bool
-    case_type: str
-    category: Category
-    reasoning_summary: str
-    recommended_template_code: str | None = None
-    required_context: list[RequiredContext] = []
-    warnings: list[str] = []
-
+from pydantic import BaseModel
 
 
 class Draft(BaseModel):

@@ -6,18 +6,6 @@ from .. import ai
 from ..repositories import sqlite as s
 from ..core.settings import settings
 
-CLASSIFIER_PROMPT = """Ты помощник юридического отдела управляющей компании. Классифицируй обращение.
-Не принимай окончательное решение и не выдумывай факты. Похожие кейсы являются примерами практики,
-не источником фактов о текущем обращении. Верни JSON с полями legal_required (bool),
-case_type (typical|disputed|unknown), category ({code,name}),
-reasoning_summary, recommended_template_code, required_context ([{key,reason,required}]), warnings.
-Доступные ключи контекста: work_history, dispatch_requests, previous_appeals, building_info.
-Запрашивай только нужные ключи. Если заявитель требует признать ответственность организации
-или возместить ущерб, укажи legal_required=true и case_type=disputed. Для требования о
-возмещении ущерба используй категорию PROPERTY_DAMAGE_CLAIM, если она подходит.
-Шаблон претензии о демонтаже кондиционера подходит только для письма владельцу
-оборудования при наличии подтверждённых сведений об установке на фасаде;
-для ответа жителю, сообщившему о проблеме, не выбирай этот шаблон."""
 DRAFT_PROMPT = """Ты помощник юридического отдела управляющей компании. Создай только проект ответа.
 Не выдумывай факты, работы, даты, документы, нормы или данные заявителя. Похожие обращения служат
 примерами практики; запрещено переносить из них конкретные факты. Если передан шаблон,
@@ -95,52 +83,23 @@ async def search(appeal_id: str) -> list[dict]:
     return ranked
 
 
-def template_for(classification: dict) -> dict | None:
-    code = classification.get("recommended_template_code")
-    if code:
-        row = s.one("SELECT * FROM templates WHERE code=? AND active=1 ORDER BY version DESC LIMIT 1", (code,))
-        if row:
-            return row
-    return s.one("SELECT * FROM templates WHERE category_code=? AND active=1 ORDER BY version DESC LIMIT 1",
-                 (classification["category"]["code"],))
-
-
-async def classify(appeal_id: str) -> dict:
-    row = appeal(appeal_id)
-    set_status(appeal_id, "CLASSIFYING")
-    cases = s.latest(appeal_id, "similar_cases") or []
-    templates = s.all_rows("SELECT code,name,category_code FROM templates WHERE active=1")
-    payload = {"appeal": {"text": ai.llm_text(row["text"]), "source": row["source"],
-                          "building_id": row["building_id"]},
-               "similar_cases": [{"id": c["id"], "appeal_text": ai.llm_text(c["appeal_text"]),
-                                  "decision_text": ai.llm_text(c["decision_text"] or "")}
-                                 for c in cases], "templates": templates}
-    parsed, usage = await ai.gigachat.structured(ai.Classification, CLASSIFIER_PROMPT, payload)
-    if parsed.case_type not in {"typical", "disputed", "unknown"}:
-        raise ValueError("Недопустимый case_type")
-    data = parsed.model_dump()
-    if data["recommended_template_code"] and not template_for(data):
-        data["warnings"].append("Рекомендованный шаблон недоступен")
-    s.result(appeal_id, "classification", data, settings.gigachat_model, "classifier-v1")
-    s.audit(appeal_id, "classification", details={"model": settings.gigachat_model, "usage": usage})
-    set_status(appeal_id, "CONTEXT_REQUIRED" if parsed.legal_required else "READY_FOR_REVIEW")
-    return data
-
+def template_for(row: dict) -> dict | None:
+    # Template selection is explicit import metadata, never an AI classification.
+    raw = json.loads(row["raw_payload"])
+    code = raw.get("template_code")
+    if not isinstance(code, str) or not code.strip():
+        return None
+    template = s.one("SELECT * FROM templates WHERE code=? AND active=1 ORDER BY version DESC LIMIT 1", (code,))
+    if not template:
+        raise ValueError("Указанный template_code не найден среди активных шаблонов")
+    return template
 
 def load_context(appeal_id: str) -> list[dict]:
     row = appeal(appeal_id)
-    classification = s.latest(appeal_id, "classification")
-    if not classification:
-        raise ValueError("Сначала выполните классификацию")
     set_status(appeal_id, "CONTEXT_LOADING")
     raw = json.loads(row["raw_payload"])
     context = []
-    for request in classification["required_context"]:
-        key = request["key"]
-        if key not in TOOL_KEYS:
-            context.append({"key": key, "status": "unavailable", "source": "tool registry",
-                            "data": None, "warning": "Инструмент не разрешён"})
-            continue
+    for key in sorted(TOOL_KEYS):
         # Until real internal integrations are supplied, only imported facts are returned.
         value = raw.get("context", {}).get(key) if isinstance(raw.get("context"), dict) else None
         if key == "building_info" and not value and row["building_id"]:
@@ -155,17 +114,14 @@ def load_context(appeal_id: str) -> list[dict]:
 
 async def generate_draft(appeal_id: str) -> dict:
     row = appeal(appeal_id)
-    classification = s.latest(appeal_id, "classification")
-    if not classification or not classification["legal_required"]:
-        raise ValueError("Для обращения не требуется юридический черновик")
     context = s.latest(appeal_id, "context") or load_context(appeal_id)
-    template = template_for(classification)
+    template = template_for(row)
     similar = s.latest(appeal_id, "similar_cases") or []
     set_status(appeal_id, "DRAFTING")
     payload = {"appeal": {"text": ai.llm_text(row["text"]), "title": row["title"],
                           "applicant_name": ai.llm_text(row["applicant_name"] or ""),
                           "received_at": row["received_at"]},
-               "classification": classification, "template": template["body"] if template else None,
+               "legal_required": True, "template": template["body"] if template else None,
                "context": context,
                "similar_cases": [{"id": c["id"], "appeal_text": ai.llm_text(c["appeal_text"]),
                                   "decision_text": ai.llm_text(c["decision_text"] or "")}
@@ -207,10 +163,8 @@ async def generate_draft(appeal_id: str) -> dict:
 async def process(appeal_id: str):
     try:
         await search(appeal_id)
-        classification = await classify(appeal_id)
-        if classification["legal_required"]:
-            load_context(appeal_id)
-            await generate_draft(appeal_id)
+        load_context(appeal_id)
+        await generate_draft(appeal_id)
         return detail(appeal_id)
     except Exception as exc:
         row = s.one("SELECT status FROM appeals WHERE id=?", (appeal_id,))
@@ -222,9 +176,7 @@ async def process(appeal_id: str):
 def detail(appeal_id: str) -> dict:
     row = appeal(appeal_id)
     row["raw_payload"] = json.loads(row["raw_payload"])
-    row["classification"] = s.latest(appeal_id, "classification")
-    if row["classification"]:
-        row["classification"].pop("confidence", None)  # Legacy stored results.
+    row["legal_required"] = True
     row["similar_cases"] = s.latest(appeal_id, "similar_cases") or []
     row["context"] = s.latest(appeal_id, "context") or []
     draft = s.one("SELECT * FROM drafts WHERE appeal_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1", (appeal_id,))
