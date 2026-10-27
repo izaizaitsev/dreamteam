@@ -9,6 +9,10 @@ load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 
 @dataclass(frozen=True)
 class Settings:
+    admin_username: str = os.getenv("ADMIN_USERNAME", "admin")
+    admin_password: str = os.getenv("ADMIN_PASSWORD", "")
+    session_ttl_seconds: int = int(os.getenv("SESSION_TTL_SECONDS", "28800"))
+    session_cookie_secure: bool = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
     database_path: str = os.getenv("DATABASE_PATH", "app/data/appeals.sqlite3")
     storage_base_path: str = os.getenv("STORAGE_BASE_PATH", "app/data/documents")
     gigachat_key_path: str = os.getenv("GIGACHAT_AUTH_KEY_FILE", "app/data/gigachat_auth_key")

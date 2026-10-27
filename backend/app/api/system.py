@@ -13,17 +13,17 @@ def health():
     return {"status": "ok"}
 
 
-@router.get("/health/db")
+@router.get("/health/db", dependencies=[Depends(auth)])
 def health_db():
     return {"status": "ok", "appeals": repository.one("SELECT COUNT(*) AS n FROM appeals")["n"]}
 
 
-@router.get("/health/gigachat")
+@router.get("/health/gigachat", dependencies=[Depends(auth)])
 def health_gigachat():
     return {"configured": bool(gigachat_key()), "model": settings.gigachat_model}
 
 
-@router.get("/health/embedding")
+@router.get("/health/embedding", dependencies=[Depends(auth)])
 def health_embedding():
     return {"status": "configured" if embedding_key() else "unavailable",
             "model": settings.embedding_model}

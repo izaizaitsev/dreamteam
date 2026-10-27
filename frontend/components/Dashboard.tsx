@@ -17,7 +17,7 @@ const navigation: { id: View; title: string; icon: Parameters<typeof Icon>[0]["n
   { id: "settings", title: "Настройки", icon: "settings" },
 ];
 
-export default function Dashboard() {
+export default function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [view, setView] = useState<View>("appeals");
   const [selected, setSelected] = useState<string | null>(null);
   const [role, setRole] = useState<Role>("ADMIN");
@@ -50,7 +50,7 @@ export default function Dashboard() {
       <div className="sidebar-bottom"><span className="online-dot"/><div><strong>Система активна</strong><small>Внутренний контур</small></div></div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><button className="menu-button" aria-label="Открыть меню" onClick={() => setSidebarOpen(true)}><Icon name="grid"/></button><div className="breadcrumbs"><span>DreamTeam</span><Icon name="chevron" size={14}/><strong>{pageTitle}</strong></div><div className="topbar-right"><span className="role-label"><Icon name="shield" size={15}/>{role}</span><span className="avatar">{role[0]}</span></div></header>
+      <header className="topbar"><button className="menu-button" aria-label="Открыть меню" onClick={() => setSidebarOpen(true)}><Icon name="grid"/></button><div className="breadcrumbs"><span>DreamTeam</span><Icon name="chevron" size={14}/><strong>{pageTitle}</strong></div><div className="topbar-right"><span className="role-label"><Icon name="shield" size={15}/>{role}</span><span className="avatar">{role[0]}</span><button className="button button-quiet" onClick={onLogout}>Выйти</button></div></header>
       <main className="content-wrap">
         {view === "appeals" && <Appeals key={selected || "list"} selected={selected} onSelect={setSelected} role={role} {...common}/>}
         {view === "import" && <ImportView onOpenAppeal={(id) => { setSelected(id); setView("appeals"); }} {...common}/>}

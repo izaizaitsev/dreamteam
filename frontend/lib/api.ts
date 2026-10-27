@@ -17,16 +17,9 @@ export async function readApiResponse<T>(response: Response): Promise<T> {
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
-  const key = sessionStorage.getItem("appKey");
-  if (key) headers.set("X-API-Key", key);
+  headers.set("X-Requested-With", "DreamTeam");
   const response = await fetch(path, { ...options, headers, cache: "no-store" });
-  if (response.status === 401) {
-    const entered = window.prompt("Введите ключ доступа к приложению");
-    if (entered) {
-      sessionStorage.setItem("appKey", entered);
-      return request<T>(path, options);
-    }
-  }
+  if (response.status === 401) window.dispatchEvent(new Event("session-expired"));
   return readApiResponse<T>(response);
 }
 
@@ -40,9 +33,8 @@ export function put<T>(path: string, payload: unknown) {
 
 export async function download(path: string, filename: string): Promise<void> {
   const headers = new Headers();
-  const key = sessionStorage.getItem("appKey");
-  if (key) headers.set("X-API-Key", key);
-  const response = await fetch(path, { headers });
+  headers.set("X-Requested-With", "DreamTeam");
+  const response = await fetch(path, { headers, cache: "no-store" });
   if (!response.ok) {
     let detail = "Не удалось скачать файл";
     try {

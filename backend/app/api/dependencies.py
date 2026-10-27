@@ -1,19 +1,22 @@
 """Role checks and external service error mapping."""
 import hmac
 import httpx
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from ..core.settings import settings
+from ..core.sessions import COOKIE_NAME, valid_session
 
 
-def auth(x_api_key: str | None = Header(default=None)):
+def auth(request: Request, x_api_key: str | None = Header(default=None)):
     keys = {"ADMIN": [settings.admin_api_key, settings.api_key],
             "LAWYER": [settings.lawyer_api_key], "OPERATOR": [settings.operator_api_key]}
-    if not any(key for values in keys.values() for key in values):
-        return "ADMIN"  # Localhost pilot only; set keys before exposing the service.
     for role, values in keys.items():
         if x_api_key and any(key and hmac.compare_digest(x_api_key, key) for key in values):
             return role
-    raise HTTPException(401, "Неверный X-API-Key")
+    if valid_session(request.cookies.get(COOKIE_NAME)):
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and request.headers.get("X-Requested-With") != "DreamTeam":
+            raise HTTPException(403, "Недопустимый источник запроса")
+        return "ADMIN"
+    raise HTTPException(401, "Требуется вход в систему")
 
 
 
