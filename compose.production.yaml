@@ -1,0 +1,87 @@
+# Standalone production configuration; do not merge with compose.yaml.
+name: dreamteam-production
+
+services:
+  proxy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set the public domain in .env.production}
+      ACME_EMAIL: ${ACME_EMAIL:?Set the TLS certificate contact email}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+    networks:
+      - app
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    environment:
+      BACKEND_INTERNAL_URL: http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - app
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set a unique administrator password of at least 12 characters}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-28800}
+      SESSION_COOKIE_SECURE: "true"
+      DATABASE_PATH: /data/appeals.sqlite3
+      STORAGE_BASE_PATH: /data/documents
+      GIGACHAT_AUTH_KEY_FILE: /data/gigachat_auth_key
+      EMBEDDING_API_KEY_FILE: /data/embedding_api_key
+      EMBEDDING_API_URL: ${EMBEDDING_API_URL:-https://foundation-models.api.cloud.ru/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      API_KEY: ${API_KEY:-}
+      QDRANT_BASE_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?Set a unique Qdrant API key}
+      GIGACHAT_AUTH_KEY: ${GIGACHAT_AUTH_KEY:-}
+      GIGACHAT_SCOPE: ${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
+      GIGACHAT_OAUTH_URL: ${GIGACHAT_OAUTH_URL:-https://ngw.devices.sberbank.ru:9443/api/v2/oauth}
+      GIGACHAT_API_URL: ${GIGACHAT_API_URL:-https://api.giga.chat/v1}
+      GIGACHAT_MODEL: ${GIGACHAT_MODEL:-GigaChat-2-pro}
+      GIGACHAT_VERIFY_SSL: "true"
+      LLM_MASK_PII: ${LLM_MASK_PII:-true}
+      RAG_RETRIEVAL_TOP_K: ${RAG_RETRIEVAL_TOP_K:-8}
+    volumes:
+      - app-data:/data
+    depends_on:
+      - qdrant
+    networks:
+      - app
+
+  qdrant:
+    image: ${QDRANT_IMAGE:?Set a pinned Qdrant image tag or digest}
+    restart: unless-stopped
+    environment:
+      QDRANT__LOG_LEVEL: ${QDRANT_LOG_LEVEL:-INFO}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Set a unique Qdrant API key}
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    networks:
+      - app
+
+networks:
+  app:
+
+volumes:
+  app-data:
+  qdrant-storage:
+  caddy-data:
+  caddy-config:

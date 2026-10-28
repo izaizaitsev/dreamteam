@@ -5,6 +5,10 @@ services:
       dockerfile: backend/Dockerfile
     restart: ${RESTART_POLICY:-unless-stopped}
     environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env (at least 12 characters)}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-28800}
+      SESSION_COOKIE_SECURE: "false"
       DATABASE_PATH: /data/appeals.sqlite3
       STORAGE_BASE_PATH: /data/documents
       GIGACHAT_AUTH_KEY_FILE: /data/gigachat_auth_key

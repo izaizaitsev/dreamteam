@@ -12,3 +12,10 @@ frontend/.next/
 frontend/tsconfig.tsbuildinfo
 .uv-cache/
 .idea/
+docs/
+
+.env.production
+
+# Project documentation is local; only README.md is versioned.
+*.md
+!README.md
