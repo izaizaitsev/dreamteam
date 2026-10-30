@@ -114,7 +114,7 @@ def load_context(appeal_id: str) -> list[dict]:
 
 async def generate_draft(appeal_id: str) -> dict:
     row = appeal(appeal_id)
-    context = s.latest(appeal_id, "context") or load_context(appeal_id)
+    context = load_context(appeal_id)
     template = template_for(row)
     similar = s.latest(appeal_id, "similar_cases") or []
     set_status(appeal_id, "DRAFTING")
@@ -163,7 +163,6 @@ async def generate_draft(appeal_id: str) -> dict:
 async def process(appeal_id: str):
     try:
         await search(appeal_id)
-        load_context(appeal_id)
         await generate_draft(appeal_id)
         return detail(appeal_id)
     except Exception as exc:
