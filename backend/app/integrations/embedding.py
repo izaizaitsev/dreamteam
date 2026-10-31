@@ -1,6 +1,7 @@
 """Cloud.ru OpenAI-compatible embedding adapter."""
 import logging
 import time
+import uuid
 import httpx
 from ..core.settings import settings
 from .credentials import embedding_key
@@ -11,12 +12,14 @@ logger = logging.getLogger("uvicorn.error")
 async def embed(text: str, query: bool = False) -> list[float]:
     key = embedding_key()
     if not key:
+        logger.warning("Embedding unavailable: model=%s reason=missing_credentials", settings.embedding_model)
         raise ValueError("Добавьте API-ключ embedding в разделе «Настройки»")
     if query:
         text = "Instruct: Given a Russian resident appeal, retrieve similar resolved appeals\nQuery: " + text
     started = time.perf_counter()
+    request_id = uuid.uuid4().hex[:12]
     purpose = "query" if query else "case"
-    logger.info("Embedding request: model=%s purpose=%s", settings.embedding_model, purpose)
+    logger.info("Embedding request: request_id=%s model=%s purpose=%s", request_id, settings.embedding_model, purpose)
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
@@ -31,10 +34,10 @@ async def embed(text: str, query: bool = False) -> list[float]:
             raise ValueError("Embedding service returned no vector")
     except Exception as exc:
         status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        logger.error("Embedding failed: model=%s purpose=%s status=%s error=%s elapsed_ms=%.0f",
-                     settings.embedding_model, purpose, status, type(exc).__name__,
+        logger.error("Embedding failed: request_id=%s model=%s purpose=%s status=%s error=%s elapsed_ms=%.0f",
+                     request_id, settings.embedding_model, purpose, status, type(exc).__name__,
                      (time.perf_counter() - started) * 1000)
         raise
-    logger.info("Embedding response: model=%s purpose=%s dimensions=%d elapsed_ms=%.0f",
-                settings.embedding_model, purpose, len(vector), (time.perf_counter() - started) * 1000)
+    logger.info("Embedding response: request_id=%s model=%s purpose=%s dimensions=%d elapsed_ms=%.0f",
+                request_id, settings.embedding_model, purpose, len(vector), (time.perf_counter() - started) * 1000)
     return vector

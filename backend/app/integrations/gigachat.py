@@ -36,23 +36,42 @@ class GigaChatClient:
     async def access_token(self, force=False):
         key = gigachat_key()
         if not key:
+            logger.warning("GigaChat unavailable: model=%s reason=missing_credentials", settings.gigachat_model)
             raise ValueError("Добавьте ключ GigaChat в разделе «Настройки»")
         async with self.lock:
             if self.token and not force and time.time() < self.expires_at - 120:
                 return self.token
-            async with httpx.AsyncClient(timeout=30, verify=gigachat_tls_verify()) as client:
-                response = await client.post(settings.gigachat_oauth_url,
-                    headers={"Authorization": "Basic " + key,
-                             "RqUID": str(uuid.uuid4()), "Accept": "application/json"},
-                    data={"scope": settings.gigachat_scope})
-                response.raise_for_status()
-                data = response.json()
-            self.token = data["access_token"]
-            self.expires_at = int(data["expires_at"]) / 1000 if data.get("expires_at") else time.time() + 1800
+            request_id = str(uuid.uuid4())
+            started = time.perf_counter()
+            logger.info("GigaChat OAuth request: request_id=%s", request_id)
+            try:
+                async with httpx.AsyncClient(timeout=30, verify=gigachat_tls_verify()) as client:
+                    response = await client.post(settings.gigachat_oauth_url,
+                        headers={"Authorization": "Basic " + key,
+                                 "RqUID": request_id, "Accept": "application/json"},
+                        data={"scope": settings.gigachat_scope})
+                    response.raise_for_status()
+                    data = response.json()
+                token = data["access_token"]
+                expires_at = int(data["expires_at"]) / 1000 if data.get("expires_at") else time.time() + 1800
+            except Exception as exc:
+                status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                logger.error("GigaChat OAuth failed: request_id=%s status=%s error=%s elapsed_ms=%.0f",
+                             request_id, status, type(exc).__name__, (time.perf_counter() - started) * 1000)
+                raise
+            self.token = token
+            self.expires_at = expires_at
+            logger.info("GigaChat OAuth response: request_id=%s status=%d elapsed_ms=%.0f",
+                        request_id, response.status_code, (time.perf_counter() - started) * 1000)
             return self.token
 
     async def complete(self, messages: list[dict]) -> dict:
-        async with httpx.AsyncClient(timeout=90, verify=gigachat_tls_verify()) as client:
+        try:
+            verify = gigachat_tls_verify()
+        except Exception as exc:
+            logger.error("GigaChat TLS configuration failed: error=%s", type(exc).__name__)
+            raise
+        async with httpx.AsyncClient(timeout=90, verify=verify) as client:
             for attempt in range(4):
                 started = time.perf_counter()
                 logger.info("GigaChat request: model=%s attempt=%d", settings.gigachat_model, attempt + 1)
@@ -99,8 +118,9 @@ class GigaChatClient:
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
         for attempt in range(2):
             raw = await self.complete(messages)
-            content = raw["choices"][0]["message"]["content"]
+            content = None
             try:
+                content = raw["choices"][0]["message"]["content"]
                 parsed = schema.model_validate(json.loads(content))
                 if schema.__name__ == "Draft" and not payload.get("template") and not parsed.full_text.strip():
                     sections = [parsed.issue_summary, parsed.factual_section, parsed.work_section,
@@ -110,12 +130,13 @@ class GigaChatClient:
                     full_text = "\n\n".join(part.strip() for part in [parsed.subject, *sections] if part.strip())
                     parsed = parsed.model_copy(update={"full_text": full_text})
                 return parsed, raw.get("usage", {})
-            except (ValueError, KeyError) as exc:
+            except (ValueError, KeyError, IndexError, TypeError) as exc:
                 logger.warning("GigaChat invalid structured response: model=%s schema=%s attempt=%d error=%s",
                                settings.gigachat_model, schema.__name__, attempt + 1, type(exc).__name__)
                 if attempt:
                     raise ValueError("GigaChat вернул невалидный JSON: " + str(exc)) from exc
-                messages.append({"role": "assistant", "content": content})
+                if isinstance(content, str) and content:
+                    messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content":
                                  "Исправь ответ: верни JSON нужной структуры. "
                                  "Если шаблона нет, заполни full_text связным текстом черновика."})

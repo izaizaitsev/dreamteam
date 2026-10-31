@@ -1,10 +1,13 @@
 """Explicit, reviewable stages of appeal processing."""
 from __future__ import annotations
 import json
+import logging
 import re
 from .. import ai
 from ..repositories import sqlite as s
 from ..core.settings import settings
+
+logger = logging.getLogger("uvicorn.error")
 
 DRAFT_PROMPT = """Ты помощник юридического отдела управляющей компании. Создай только проект ответа.
 Не выдумывай факты, работы, даты, документы, нормы или данные заявителя. Похожие обращения служат
@@ -59,6 +62,7 @@ def appeal(appeal_id: str) -> dict:
 
 
 def set_status(appeal_id: str, status: str, error: str | None = None):
+    logger.info("Appeal processing: appeal_id=%s stage=%s failed=%s", appeal_id, status, bool(error))
     s.execute("UPDATE appeals SET status=?,error=?,updated_at=? WHERE id=?",
               (status, error, s.now(), appeal_id))
     s.audit(appeal_id, "stage", details={"stage": status, "error": error})
