@@ -12,3 +12,5 @@
 
 .login-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
 .login-panel { width: 100%; max-width: 440px; }
+
+.case-item-meta { display: grid; justify-items: end; gap: 4px; text-align: right; }

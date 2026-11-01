@@ -3,11 +3,35 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime
 from .. import ai
 from ..repositories import sqlite as s
 from ..core.settings import settings
 
 logger = logging.getLogger("uvicorn.error")
+
+def similar_with_dates(cases: list[dict]) -> list[dict]:
+    """Use the source appeal date, never the date the case was imported."""
+    result = []
+    for case in cases:
+        stored = s.one("SELECT metadata FROM cases WHERE id=?", (case["id"],))
+        metadata = json.loads((stored or case).get("metadata") or "{}")
+        origin = s.one("SELECT received_at FROM appeals WHERE id=?",
+                       (metadata.get("origin_appeal_id"),))
+        value = (origin or {}).get("received_at") or metadata.get("received_at") or metadata.get("DATE_CREATE") or metadata.get("date")
+        received_at = None
+        if isinstance(value, str):
+            try:
+                received_at = datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
+            except ValueError:
+                for pattern in ("%d.%m.%Y", "%d.%m.%Y %H:%M:%S"):
+                    try:
+                        received_at = datetime.strptime(value, pattern).isoformat()
+                        break
+                    except ValueError:
+                        continue
+        result.append({**case, "received_at": received_at})
+    return result
 
 DRAFT_PROMPT = """Ты помощник юридического отдела управляющей компании. Создай только проект ответа.
 Не выдумывай факты, работы, даты, документы, нормы или данные заявителя. Похожие обращения служат
@@ -81,7 +105,7 @@ async def search(appeal_id: str) -> list[dict]:
         case = s.one("SELECT * FROM cases WHERE id=?", (hit["id"],))
         if case:
             cases.append({**case, **hit})
-    ranked = cases[:settings.retrieval_top_k]
+    ranked = similar_with_dates(cases[:settings.retrieval_top_k])
     s.result(appeal_id, "similar_cases", ranked, settings.embedding_model)
     set_status(appeal_id, previous_status)
     return ranked
@@ -180,7 +204,7 @@ def detail(appeal_id: str) -> dict:
     row = appeal(appeal_id)
     row["raw_payload"] = json.loads(row["raw_payload"])
     row["legal_required"] = True
-    row["similar_cases"] = s.latest(appeal_id, "similar_cases") or []
+    row["similar_cases"] = similar_with_dates(s.latest(appeal_id, "similar_cases") or [])
     row["context"] = s.latest(appeal_id, "context") or []
     draft = s.one("SELECT * FROM drafts WHERE appeal_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1", (appeal_id,))
     if draft:

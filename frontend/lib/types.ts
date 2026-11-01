@@ -18,6 +18,7 @@ export type SimilarCase = {
   id: string;
   external_id: string;
   appeal_text: string;
+  received_at?: string | null;
   decision_text?: string | null;
   decision_file_uri?: string | null;
   retrieval_score?: number;

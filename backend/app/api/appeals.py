@@ -73,7 +73,7 @@ async def generate(appeal_id: str):
 
 @router.get("/api/appeals/{appeal_id}/similar-cases", dependencies=[Depends(auth)])
 def similar(appeal_id: str):
-    return s.latest(appeal_id, "similar_cases") or []
+    return p.similar_with_dates(s.latest(appeal_id, "similar_cases") or [])
 
 
 
