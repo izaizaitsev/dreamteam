@@ -26,8 +26,9 @@ async def import_appeals(request: Request):
     for index, item in enumerate(items):
         try:
             dto = adapter.convert(item)
-            existing = s.one("SELECT id,text,bitrix_status FROM appeals WHERE external_id=?", (dto.external_id,))
-            if existing and existing["text"] == dto.text and existing["bitrix_status"] == dto.status:
+            existing = s.one("SELECT id,text,bitrix_status,raw_payload FROM appeals WHERE external_id=?", (dto.external_id,))
+            if (existing and existing["text"] == dto.text and existing["bitrix_status"] == dto.status
+                    and json.loads(existing["raw_payload"]) == dto.raw_payload):
                 report["skipped"] += 1
                 continue
             if existing:

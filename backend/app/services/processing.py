@@ -7,6 +7,7 @@ from datetime import datetime
 from .. import ai
 from ..repositories import sqlite as s
 from ..core.settings import settings
+from .draft_prompt import DRAFT_PROMPT, PROMPT_VERSION
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -33,15 +34,6 @@ def similar_with_dates(cases: list[dict]) -> list[dict]:
         result.append({**case, "received_at": received_at})
     return result
 
-DRAFT_PROMPT = """Ты помощник юридического отдела управляющей компании. Создай только проект ответа.
-Не выдумывай факты, работы, даты, документы, нормы или данные заявителя. Похожие обращения служат
-примерами практики; запрещено переносить из них конкретные факты. Если передан шаблон,
-сформируй секции для его полей; итоговый текст будет собран приложением, поэтому full_text может быть пустым.
-Если шаблона нет, обязательно верни непустой full_text. Если данных нет, перечисли их
-в missing_information; противоречия перечисли в warnings. Верни JSON с полями subject,
-issue_summary, factual_section, work_section, legal_section, closing_section, full_text,
-used_case_ids, used_context_keys, missing_information, warnings."""
-
 TOOL_KEYS = {"work_history", "dispatch_requests", "previous_appeals", "building_info"}
 TEMPLATE_FIELD = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
 
@@ -54,6 +46,7 @@ def render_template(body: str, row: dict, draft: dict) -> tuple[str, list[str], 
         "title": row["title"], "applicant_name": row["applicant_name"],
         "building_id": row["building_id"], "apartment_id": row["apartment_id"],
         "received_at": row["received_at"], "appeal_text": row["text"],
+        "body": draft.get("body"), "closing": draft.get("closing"),
         **{key: context.get(key) for key in TOOL_KEYS},
         **{key: draft.get(key) for key in (
             "subject", "issue_summary", "factual_section", "work_section",
@@ -61,6 +54,9 @@ def render_template(body: str, row: dict, draft: dict) -> tuple[str, list[str], 
     }
     values.update({key: value for key, value in template_fields.items()
                    if key not in values and isinstance(value, (str, int, float))})
+    for key, value in draft.get("header", {}).items():
+        if not values.get(key):
+            values[key] = value
     missing = []
     used_context = []
 
@@ -70,7 +66,7 @@ def render_template(body: str, row: dict, draft: dict) -> tuple[str, list[str], 
         if value is None or value == "":
             if key not in missing:
                 missing.append(key)
-            return f"[требуется уточнить: {key}]"
+            return "________"
         if key in TOOL_KEYS and key not in used_context:
             used_context.append(key)
         return str(value) if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
@@ -145,18 +141,46 @@ async def generate_draft(appeal_id: str) -> dict:
     context = load_context(appeal_id)
     template = template_for(row)
     similar = s.latest(appeal_id, "similar_cases") or []
+    # Only completed responses are useful as examples; preserve retrieval order.
+    examples = [case for case in similar if (case.get("decision_text") or "").strip()][:3]
+    raw = json.loads(row["raw_payload"])
+    source_fields = raw.get("template_fields") if isinstance(raw.get("template_fields"), dict) else {}
+    section_keys = {"subject", "issue_summary", "factual_section", "work_section",
+                    "legal_section", "closing_section", "body", "closing", "full_text"}
+    header_keys = sorted(set(TEMPLATE_FIELD.findall(template["body"])) - section_keys - TOOL_KEYS - {"appeal_text"}) if template else [
+        "recipient_name", "recipient_address", "outgoing_number", "outgoing_date", "sender_name", "signatory_name"]
+    known_values = {**source_fields, **{key: row.get(key) for key in (
+        "title", "applicant_name", "building_id", "apartment_id", "received_at") if row.get(key)}}
+    header_values = {key: str(known_values[key]) for key in header_keys
+                     if isinstance(known_values.get(key), (str, int, float)) and known_values[key] != ""}
+    header_schema = {"type": "object", "properties": {
+        key: {"type": ["string", "null"]} for key in header_keys},
+        "required": header_keys, "additionalProperties": False}
+    response_schema = ai.Draft.model_json_schema()
+    response_schema["properties"]["header"] = header_schema
     set_status(appeal_id, "DRAFTING")
     payload = {"appeal": {"text": ai.llm_text(row["text"]), "title": row["title"],
                           "applicant_name": ai.llm_text(row["applicant_name"] or ""),
                           "received_at": row["received_at"]},
                "legal_required": True, "template": template["body"] if template else None,
+               "template_id": template["code"] if template else None,
+               "template_fields": sorted(set(TEMPLATE_FIELD.findall(template["body"]))) if template else [],
+               "header_schema": header_schema, "header_values": header_values,
+               "response_schema": response_schema,
+               "drafting_task": raw.get("drafting_task") or "Подготовь ответ по существу обращения и уместное правовое обоснование.",
+               "legal_sources": raw.get("legal_sources") or [],
                "context": context,
                "similar_cases": [{"id": c["id"], "appeal_text": ai.llm_text(c["appeal_text"]),
                                   "decision_text": ai.llm_text(c["decision_text"] or "")}
-                                 for c in similar]}
+                                 for c in examples]}
     parsed, usage = await ai.gigachat.structured(ai.Draft, DRAFT_PROMPT, payload)
     data = parsed.model_dump()
-    allowed_cases = {c["id"] for c in similar}
+    data["closing_section"] = data["closing_section"] or data["closing"] or ""
+    # The model returns structure; the application controls document assembly.
+    header_text = "\n".join(value for value in data["header"].values() if value)
+    data["full_text"] = "\n\n".join(part.strip() for part in (
+        header_text, data["subject"], data["body"], data["closing"] or "") if part.strip())
+    allowed_cases = {c["id"] for c in examples}
     data["used_case_ids"] = [x for x in data["used_case_ids"] if x in allowed_cases]
     allowed_context = {c["key"] for c in context if c["status"] == "available"}
     data["used_context_keys"] = [x for x in data["used_context_keys"] if x in allowed_context]
@@ -181,7 +205,7 @@ async def generate_draft(appeal_id: str) -> dict:
     s.execute("INSERT INTO drafts (id,appeal_id,ai_payload,edited_text,status,reviewer,reviewed_at,created_at) VALUES (?,?,?,?,?,?,?,?)",
               (draft_id, appeal_id, json.dumps(data, ensure_ascii=False), data["full_text"],
                "PENDING", None, None, s.now()))
-    s.result(appeal_id, "draft", {"draft_id": draft_id, **data}, settings.gigachat_model, "draft-v1")
+    s.result(appeal_id, "draft", {"draft_id": draft_id, **data}, settings.gigachat_model, PROMPT_VERSION)
     s.audit(appeal_id, "draft_generated", details={"draft_id": draft_id,
             "model": settings.gigachat_model, "usage": usage, "template_id": template["id"] if template else None})
     set_status(appeal_id, "READY_FOR_REVIEW")

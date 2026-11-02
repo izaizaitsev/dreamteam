@@ -1,8 +1,12 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class Draft(BaseModel):
-    subject: str
+    model_config = ConfigDict(extra="forbid")
+    header: dict[str, str | None]
+    body: str
+    closing: str | None
+    subject: str = ""
     issue_summary: str = ""
     factual_section: str = ""
     work_section: str = ""

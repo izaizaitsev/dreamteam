@@ -122,13 +122,15 @@ class GigaChatClient:
             try:
                 content = raw["choices"][0]["message"]["content"]
                 parsed = schema.model_validate(json.loads(content))
-                if schema.__name__ == "Draft" and not payload.get("template") and not parsed.full_text.strip():
-                    sections = [parsed.issue_summary, parsed.factual_section, parsed.work_section,
-                                parsed.legal_section, parsed.closing_section]
-                    if not any(section.strip() for section in sections):
-                        raise ValueError("Пустой full_text и секции черновика при отсутствии шаблона")
-                    full_text = "\n\n".join(part.strip() for part in [parsed.subject, *sections] if part.strip())
-                    parsed = parsed.model_copy(update={"full_text": full_text})
+                if schema.__name__ == "Draft":
+                    if not parsed.body.strip():
+                        raise ValueError("Пустой body черновика")
+                    expected = set(payload["header_schema"]["properties"])
+                    if set(parsed.header) != expected:
+                        raise ValueError("Поля header не соответствуют header_schema")
+                    for key, value in payload["header_values"].items():
+                        if parsed.header[key] != value:
+                            raise ValueError("Изменены известные реквизиты шапки")
                 return parsed, raw.get("usage", {})
             except (ValueError, KeyError, IndexError, TypeError) as exc:
                 logger.warning("GigaChat invalid structured response: model=%s schema=%s attempt=%d error=%s",
@@ -139,7 +141,7 @@ class GigaChatClient:
                     messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content":
                                  "Исправь ответ: верни JSON нужной структуры. "
-                                 "Если шаблона нет, заполни full_text связным текстом черновика."})
+                                 "Заполни непустой body, header по header_schema и closing. Сохрани известные header_values."})
         raise RuntimeError("Недоступный ответ модели")
 
 
