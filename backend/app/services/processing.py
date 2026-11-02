@@ -232,6 +232,7 @@ def detail(appeal_id: str) -> dict:
     row["context"] = s.latest(appeal_id, "context") or []
     draft = s.one("SELECT * FROM drafts WHERE appeal_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1", (appeal_id,))
     if draft:
+        draft["chat"] = s.all_rows("SELECT id,role,content,snapshot_text,created_at FROM draft_chat WHERE draft_id=? ORDER BY rowid", (draft["id"],))
         draft["ai_payload"] = json.loads(draft["ai_payload"])
         draft["ai_payload"].pop("confidence", None)
     row["draft"] = draft

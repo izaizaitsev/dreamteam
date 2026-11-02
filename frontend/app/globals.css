@@ -14,3 +14,13 @@
 .login-panel { width: 100%; max-width: 440px; }
 
 .case-item-meta { display: grid; justify-items: end; gap: 4px; text-align: right; }
+
+.draft-chat { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 18px; }
+.draft-chat h3 { font-size: 14px; }
+.draft-chat-history { display: grid; gap: 10px; max-height: 420px; overflow-y: auto; margin-bottom: 16px; }
+.draft-chat-message { border-radius: 8px; padding: 12px; background: #f7f9f8; }
+.draft-chat-user { background: #ecf6f1; }
+.draft-chat-meta { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; }
+.draft-chat-meta small { color: #6b7c80; }
+.draft-chat-message p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.draft-chat textarea { width: 100%; resize: vertical; border: 1px solid #dce5e0; border-radius: 8px; padding: 12px; font: inherit; }

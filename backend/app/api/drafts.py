@@ -2,8 +2,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from .dependencies import lawyer
-from ..services import review
+from .dependencies import auth, lawyer, ai_failure
+from ..services import draft_chat, review
 
 router = APIRouter()
 
@@ -16,6 +16,22 @@ class DraftEdit(BaseModel):
 class Review(BaseModel):
     actor: str = Field(min_length=1)
     text: str | None = None
+
+
+class ChatInput(BaseModel):
+    instruction: str = Field(min_length=1, max_length=8000)
+    text: str = Field(min_length=1, max_length=100000)
+    base_text: str = Field(max_length=100000)
+
+
+@router.post("/api/drafts/{draft_id}/chat", dependencies=[Depends(lawyer)])
+async def chat(draft_id: str, body: ChatInput, role: str = Depends(auth)):
+    try:
+        return await draft_chat.refine(draft_id, body.instruction, body.text, body.base_text, role)
+    except review.ReviewError as exc:
+        translate(exc)
+    except Exception as exc:
+        ai_failure(exc)
 
 
 def translate(exc: review.ReviewError):

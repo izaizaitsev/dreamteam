@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS drafts (
  document_uri TEXT
 );
 CREATE INDEX IF NOT EXISTS drafts_appeal ON drafts(appeal_id,created_at);
+CREATE TABLE IF NOT EXISTS draft_chat (
+ id TEXT PRIMARY KEY, draft_id TEXT NOT NULL REFERENCES drafts(id),
+ role TEXT NOT NULL CHECK(role IN ('user','assistant')), content TEXT NOT NULL,
+ snapshot_text TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS draft_chat_draft ON draft_chat(draft_id,created_at);
 CREATE TABLE IF NOT EXISTS audit (
  id TEXT PRIMARY KEY, appeal_id TEXT, action TEXT NOT NULL,
  actor TEXT, details TEXT NOT NULL, created_at TEXT NOT NULL

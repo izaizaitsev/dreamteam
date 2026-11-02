@@ -38,6 +38,15 @@ export type Draft = {
   edited_text: string;
   document_uri?: string | null;
   ai_payload: DraftPayload | string;
+  chat?: DraftChatMessage[];
+};
+
+export type DraftChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  snapshot_text: string;
+  created_at: string;
 };
 
 export type AppealDetail = AppealRow & {

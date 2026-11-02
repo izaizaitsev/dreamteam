@@ -8,11 +8,46 @@ import uuid
 from pathlib import Path
 import certifi
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from ..core.settings import settings
 from .credentials import gigachat_key
 
 logger = logging.getLogger("uvicorn.error")
+
+def parse_model_json(content: str) -> dict:
+    """Accept a JSON object, optionally inside a single Markdown code block."""
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Модель вернула пустой текст ответа")
+    text = content.strip().lstrip("\ufeff").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines[0].strip().lower() in {"```", "```json"} and lines[-1].strip() == "```":
+            text = "\n".join(lines[1:-1]).strip()
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        if not exc.msg.startswith("Invalid control character"):
+            raise
+        # Models sometimes emit literal line breaks inside body. Preserve them,
+        # while still requiring valid quoting, structure and the response schema.
+        value = json.loads(text, strict=False)
+        logger.info("GigaChat JSON normalized: reason=unescaped_control_character")
+    if not isinstance(value, dict):
+        raise ValueError("Модель должна вернуть JSON-объект")
+    return value
+
+
+def response_error(exc: Exception) -> str:
+    """Diagnostic details without input text, model output or Pydantic input values."""
+    if isinstance(exc, json.JSONDecodeError):
+        return f"JSON syntax: {exc.msg}; line={exc.lineno} column={exc.colno} position={exc.pos}"
+    if isinstance(exc, ValidationError):
+        return "Schema validation: " + "; ".join(
+            f"{'.'.join(map(str, error['loc']))}: {error['type']}"
+            for error in exc.errors(include_input=False, include_context=False)[:8])
+    if isinstance(exc, (KeyError, IndexError, TypeError)):
+        return "Неверная структура ответа или тип поля"
+    return str(exc)
 
 
 def gigachat_tls_verify() -> ssl.SSLContext | bool:
@@ -119,9 +154,14 @@ class GigaChatClient:
         for attempt in range(2):
             raw = await self.complete(messages)
             content = None
+            finish_reason = None
             try:
-                content = raw["choices"][0]["message"]["content"]
-                parsed = schema.model_validate(json.loads(content))
+                choice = raw["choices"][0]
+                finish_reason = choice.get("finish_reason")
+                content = choice["message"]["content"]
+                if finish_reason in {"length", "max_tokens"}:
+                    raise ValueError("Ответ модели обрезан по лимиту токенов; сократи текст и верни завершённый JSON")
+                parsed = schema.model_validate(parse_model_json(content))
                 if schema.__name__ == "Draft":
                     if not parsed.body.strip():
                         raise ValueError("Пустой body черновика")
@@ -133,15 +173,20 @@ class GigaChatClient:
                             raise ValueError("Изменены известные реквизиты шапки")
                 return parsed, raw.get("usage", {})
             except (ValueError, KeyError, IndexError, TypeError) as exc:
-                logger.warning("GigaChat invalid structured response: model=%s schema=%s attempt=%d error=%s",
-                               settings.gigachat_model, schema.__name__, attempt + 1, type(exc).__name__)
+                detail = response_error(exc)
+                logger.warning("GigaChat invalid structured response: model=%s schema=%s attempt=%d error=%s detail=%s finish_reason=%s characters=%d",
+                               settings.gigachat_model, schema.__name__, attempt + 1, type(exc).__name__,
+                               detail, finish_reason, len(content) if isinstance(content, str) else 0)
                 if attempt:
-                    raise ValueError("GigaChat вернул невалидный JSON: " + str(exc)) from exc
+                    raise RuntimeError("GigaChat не вернул ответ нужной структуры: " + detail) from exc
                 if isinstance(content, str) and content:
                     messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content":
-                                 "Исправь ответ: верни JSON нужной структуры. "
-                                 "Заполни непустой body, header по header_schema и closing. Сохрани известные header_values."})
+                                 "Исправь ответ. Ошибка проверки: " + detail + ". "
+                                 "Верни только один завершённый JSON-объект по response_schema, без Markdown. "
+                                 "Экранируй двойные кавычки внутри строк как \\\" и переводы строк как \\n. "
+                                 "Сохрани все обязательные поля и типы из response_schema. "
+                                 "Если переданы header_schema и header_values, соблюдай их."})
         raise RuntimeError("Недоступный ответ модели")
 
 
