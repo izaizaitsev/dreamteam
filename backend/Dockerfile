@@ -9,4 +9,5 @@ RUN python -c "import subprocess,sys,tomllib; deps=tomllib.load(open('/workspace
 
 COPY backend/app /workspace/app
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Only the private Docker network (and local debugging port) can reach this server.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
